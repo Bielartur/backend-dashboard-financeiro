@@ -7,7 +7,12 @@ from . import model
 from ..auth.model import TokenData
 from ..entities.merchant import Merchant
 from ..entities.merchant_alias import MerchantAlias
-from ..exceptions.merchants import CategoryCreationError, CategoryNotFoundError
+from ..exceptions.merchants import (
+    MerchantCreationError,
+    MerchantNotFoundError,
+    MerchantAliasCreationError,
+    MerchantAliasNotFoundError,
+)
 import logging
 
 
@@ -22,10 +27,10 @@ def create_merchant(db: Session, merchant: model.MerchantCreate) -> Merchant:
     except IntegrityError as e:
         logging.error(f"Falha na criação de merchant: {merchant.name}")
         if isinstance(e.orig, UniqueViolation):
-            raise CategoryCreationError(
+            raise MerchantCreationError(
                 f"Já existe um merchant com o nome {merchant.name}."
             )
-        raise CategoryCreationError(str(e.orig))
+        raise MerchantCreationError(str(e.orig))
 
 
 def get_merchants(db: Session) -> list[model.MerchantResponse]:
@@ -38,7 +43,7 @@ def get_merchant_by_id(db: Session, merchant_id: UUID) -> Merchant:
     merchant = db.query(Merchant).filter(Merchant.id == merchant_id).first()
     if not merchant:
         logging.warning(f"Merchant de ID {merchant_id} não encontrado")
-        raise CategoryNotFoundError(merchant_id)
+        raise MerchantNotFoundError(merchant_id)
     logging.info(f"Merchant de ID {merchant_id} recuperado")
     return merchant
 
@@ -76,10 +81,10 @@ def create_merchant_alias(
     except IntegrityError as e:
         logging.error(f"Falha na criação de alias: {alias.pattern}")
         if isinstance(e.orig, UniqueViolation):
-            raise CategoryCreationError(
+            raise MerchantAliasCreationError(
                 f"Já existe um alias com o padrão {alias.pattern}."
             )
-        raise CategoryCreationError(str(e.orig))
+        raise MerchantAliasCreationError(str(e.orig))
 
 
 def get_aliases_by_merchant(
@@ -94,7 +99,7 @@ def get_aliases_by_merchant(
 def delete_merchant_alias(db: Session, alias_id: UUID) -> None:
     alias = db.query(MerchantAlias).filter(MerchantAlias.id == alias_id).first()
     if not alias:
-        raise CategoryNotFoundError(alias_id)
+        raise MerchantAliasNotFoundError(alias_id)
     db.delete(alias)
     db.commit()
     logging.info(f"Alias de ID {alias_id} foi excluído")
