@@ -1,0 +1,22 @@
+[project]
+name = "backend-financas"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "bcrypt==3.2.0",
+    "fastapi>=0.128.0",
+    "load-dotenv>=0.1.0",
+    "passlib>=1.7.4",
+    "psycopg2-binary>=2.9.11",
+    "pydantic[email]>=2.12.5",
+    "sqlalchemy>=2.0.45",
+    "uvicorn>=0.40.0",
+    "alembic>=1.17.0",
+    "email-validator>=2.3.0",
+    "pyjwt>=2.10.1",
+    "python-dotenv>=1.1.1",
+    "python-multipart>=0.0.20",
+    "slowapi>=0.1.9",
+]
