@@ -14,18 +14,21 @@ from ..exceptions.auth import AuthenticationError
 import logging
 import os
 
-SECRET_KEY = os.getenv('SECRET_KEY')
-ALGORITHM = os.getenv('ALGORITHM')
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 oauth2_bearer = OAuth2PasswordBearer(tokenUrl="auth/token")
 bcrypt_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt_context.verify(plain_password, hashed_password)
 
+
 def get_password_hash(password: str) -> str:
     return bcrypt_context.hash(password)
+
 
 def authenticate_user(email: str, password: str, db: Session) -> User | bool:
     user = db.query(User).filter(User.email == email).first()
@@ -34,24 +37,29 @@ def authenticate_user(email: str, password: str, db: Session) -> User | bool:
         return False
     return user
 
+
 def create_access_token(email: str, user_id: UUID, expires_delta: timedelta) -> str:
     encode = {
-        'sub': email,
-        'id': str(user_id),
-        'exp': datetime.now(timezone.utc) + expires_delta,
+        "sub": email,
+        "id": str(user_id),
+        "exp": datetime.now(timezone.utc) + expires_delta,
     }
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
+
 
 def verify_token(token: str) -> model.TokenData:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get('id')
+        user_id: str = payload.get("id")
         return model.TokenData(user_id=user_id)
     except PyJWTError as e:
-        logging.warning(f'Falha na verificação de Token: {str(e)}')
+        logging.warning(f"Falha na verificação de Token: {str(e)}")
         raise AuthenticationError()
 
-def register_user(db: Session, register_user_request: model.RegisterUserRequest) -> User | None:
+
+def register_user(
+    db: Session, register_user_request: model.RegisterUserRequest
+) -> User | None:
     try:
         create_user_model = User(
             id=uuid4(),
@@ -63,17 +71,32 @@ def register_user(db: Session, register_user_request: model.RegisterUserRequest)
         db.add(create_user_model)
         db.commit()
     except Exception as e:
-        logging.error(f'Falha ao registrar o usuario: {register_user_request.email}. Error: {str(e)}')
+        logging.error(
+            f"Falha ao registrar o usuario: {register_user_request.email}. Error: {str(e)}"
+        )
         raise
+
 
 def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]) -> model.TokenData:
     return verify_token(token)
 
+
 CurrentUser = Annotated[model.TokenData, Depends(get_current_user)]
 
-def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: Session) -> model.Token:
-    user = authenticate_user(email=form_data.username, password=form_data.password, db=db)
+
+def login_for_access_token(
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: Session
+) -> model.Token:
+    user = authenticate_user(
+        email=form_data.username, password=form_data.password, db=db
+    )
+
     if not user:
+        logging.warning(f"Falha na autenticação para o email: {form_data.username}")
         raise AuthenticationError()
-    token = create_access_token(user.email, user.id, timedelta(ACCESS_TOKEN_EXPIRE_MINUTES))
-    return model.Token(access_token=token, token_type='bearer')
+
+    token = create_access_token(
+        user.email, user.id, timedelta(ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    logging.info(f"Usuário autenticado: {user.email}")
+    return model.Token(access_token=token, token_type="bearer")
