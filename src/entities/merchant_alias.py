@@ -1,4 +1,5 @@
 from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime, timezone
@@ -13,15 +14,24 @@ class MerchantAlias(Base):
 
     __tablename__ = "merchant_aliases"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4())
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)  # Ex: "Uber"
+    pattern = Column(String, nullable=False)  # Ex: "Uber"
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
     updated_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    merchants = relationship("Merchant", back_populates="merchant_alias")
+
+    @property
+    def merchant_ids(self):
+        return [m.id for m in self.merchants]
+
     def __repr__(self):
-        return f"<MerchantAlias(name='{self.name}', user_id='{self.user_id}')>"
+        return f"<MerchantAlias(pattern='{self.pattern}', user_id='{self.user_id}')>"
