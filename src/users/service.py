@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from . import model
 from src.entities.user import User
-from src.exceptions import UserNotFoundError, InvalidPasswordError, PasswordMismatchError
+from src.exceptions.users import UserNotFoundError
+from src.exceptions.auth import InvalidPasswordError, PasswordMismatchError
 from src.auth.service import verify_password, get_password_hash
 import logging
 

@@ -1,12 +1,12 @@
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict
+from src.schemas.base import CamelModel
 from decimal import Decimal
 from src.entities.category import Category
 
 
-class CategoryBase(BaseModel):
+class CategoryBase(CamelModel):
     name: str
 
 
@@ -20,5 +20,3 @@ class CategoryUpdate(CategoryBase):
 
 class CategoryResponse(CategoryBase):
     id: UUID
-
-    model_config = ConfigDict(from_attributes=True)
