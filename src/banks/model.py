@@ -1,10 +1,11 @@
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, constr
+from pydantic import constr
+from src.schemas.base import CamelModel
 
 
-class BankBase(BaseModel):
+class BankBase(CamelModel):
     name: str
     slug: str
     is_active: bool = True
@@ -16,7 +17,7 @@ class BankCreate(BankBase):
     pass
 
 
-class BankUpdate(BaseModel):
+class BankUpdate(CamelModel):
     name: Optional[str] = None
     slug: Optional[str] = None
     is_active: Optional[bool] = None
@@ -28,5 +29,3 @@ class BankResponse(BankBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)

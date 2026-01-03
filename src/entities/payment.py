@@ -9,16 +9,26 @@ import enum
 
 
 class PaymentMethod(enum.Enum):
-    Pix = "Pix"
-    CreditCard = "Cartão de Crédito"
-    DebitCard = "Cartão de Débito"
-    Other = "Outro"
+    Pix = "pix"
+    CreditCard = "credit_card"
+    DebitCard = "debit_card"
+    Other = "other"
+
+    @property
+    def display_name(self):
+        labels = {
+            "pix": "Pix",
+            "credit_card": "Cartão de Crédito",
+            "debit_card": "Cartão de Débito",
+            "other": "Outro",
+        }
+        return labels.get(self.value, self.value)
 
 
 class Payment(Base):
     __tablename__ = "payments"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4())
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # Normalização
@@ -38,7 +48,10 @@ class Payment(Base):
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
     updated_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
     # Relationships
