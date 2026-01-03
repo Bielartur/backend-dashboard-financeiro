@@ -1,5 +1,5 @@
 from uuid import UUID
-from pydantic import EmailStr
+from pydantic import EmailStr, BaseModel
 from src.schemas.base import CamelModel
 
 
@@ -10,7 +10,7 @@ class RegisterUserRequest(CamelModel):
     password: str
 
 
-class Token(CamelModel):
+class Token(BaseModel):
     access_token: str
     token_type: str
 

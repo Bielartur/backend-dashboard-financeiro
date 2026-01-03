@@ -48,7 +48,9 @@ def create_payment(
         # Criar payment
         new_payment = Payment(**payment.model_dump())
 
-        if not payment.category_id and merchant.category_id:
+        if payment.category_id:
+            new_payment.category_id = payment.category_id
+        elif merchant.category_id:
             new_payment.category_id = merchant.category_id
         else:
             raise PaymentCreationError(
