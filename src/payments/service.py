@@ -15,19 +15,28 @@ def create_payment(
     current_user: TokenData, db: Session, payment: model.PaymentCreate
 ) -> Payment:
     try:
-        # Buscar ou criar merchant baseado no title exato
-        merchant = db.query(Merchant).filter(Merchant.name == payment.title).first()
+        # Buscar ou criar merchant baseado no title exato e usuário
+        merchant = (
+            db.query(Merchant)
+            .filter(Merchant.name == payment.title)
+            .filter(Merchant.user_id == current_user.get_uuid())
+            .first()
+        )
 
         if not merchant:
             # Criar MerchantAlias primeiro (por padrão, mesmo nome do merchant)
             merchant_alias = MerchantAlias(
-                user_id=current_user.get_uuid(), name=payment.title
+                user_id=current_user.get_uuid(), pattern=payment.title
             )
             db.add(merchant_alias)
             db.flush()  # Para obter o ID
 
-            # Criar Merchant linkado ao alias
-            merchant = Merchant(name=payment.title, merchant_alias_id=merchant_alias.id)
+            # Criar Merchant linkado ao alias e ao usuário
+            merchant = Merchant(
+                name=payment.title,
+                merchant_alias_id=merchant_alias.id,
+                user_id=current_user.get_uuid(),
+            )
             db.add(merchant)
             db.flush()
             logging.info(
@@ -38,6 +47,14 @@ def create_payment(
 
         # Criar payment
         new_payment = Payment(**payment.model_dump())
+
+        if not payment.category_id and merchant.category_id:
+            new_payment.category_id = merchant.category_id
+        else:
+            raise PaymentCreationError(
+                "Categoria não definida. Informe uma categoria para o pagamento ou configure uma categoria padrão para o estabelecimento."
+            )
+
         new_payment.user_id = current_user.get_uuid()
         new_payment.merchant_id = merchant.id
 
