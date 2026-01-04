@@ -18,6 +18,13 @@ async def get_merchant_aliases(
     return service.get_merchant_aliases(current_user, db)
 
 
+@router.get("/search", response_model=List[model.MerchantAliasResponse])
+async def search_aliases(
+    query: str, db: DbSession, current_user: TokenData = Depends(get_current_user)
+):
+    return service.search_merchants_by_alias(current_user, db, query)
+
+
 @router.get("/{alias_id}", response_model=model.MerchantAliasResponse)
 async def get_merchant_alias(
     db: DbSession, alias_id: UUID, current_user: TokenData = Depends(get_current_user)

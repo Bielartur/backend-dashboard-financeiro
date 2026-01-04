@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from psycopg2.errors import UniqueViolation
 from . import model
+from src.aliases import model as alias_model
 from ..auth.model import TokenData
 from ..entities.merchant import Merchant
 from ..entities.merchant_alias import MerchantAlias
@@ -44,6 +45,21 @@ def get_merchants(current_user: TokenData, db: Session) -> list[model.MerchantRe
     )
     logging.info(
         f"Recuperado todos os merchants pelo usuário {current_user.get_uuid()}"
+    )
+    return merchants
+
+
+def search_merchants(
+    current_user: TokenData, db: Session, query: str
+) -> list[model.MerchantResponse]:
+    merchants = (
+        db.query(Merchant)
+        .filter(Merchant.user_id == current_user.get_uuid())
+        .filter(Merchant.name.ilike(f"%{query}%"))
+        .all()
+    )
+    logging.info(
+        f"Buscando merchants com query '{query}' pelo usuário {current_user.get_uuid()}"
     )
     return merchants
 
