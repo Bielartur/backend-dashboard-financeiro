@@ -7,6 +7,7 @@ from . import model
 from . import service
 from ..auth.service import get_current_user
 from ..auth.model import TokenData
+from src.aliases import model as alias_model
 
 router = APIRouter(prefix="/merchants", tags=["Merchants"])
 
@@ -28,6 +29,13 @@ async def get_merchants(
     db: DbSession, current_user: TokenData = Depends(get_current_user)
 ):
     return service.get_merchants(current_user, db)
+
+
+@router.get("/search", response_model=List[model.MerchantResponse])
+async def search_merchants(
+    query: str, db: DbSession, current_user: TokenData = Depends(get_current_user)
+):
+    return service.search_merchants(current_user, db, query)
 
 
 @router.get("/{merchant_id}", response_model=model.MerchantResponse)

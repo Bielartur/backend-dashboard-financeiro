@@ -192,3 +192,18 @@ def find_merchant_by_title(
 
     logging.info(f"Nenhum merchant encontrado para: {title}")
     return None
+
+
+def search_merchants_by_alias(
+    current_user: TokenData, db: Session, query: str
+) -> list[model.MerchantAliasResponse]:
+    aliases = (
+        db.query(MerchantAlias)
+        .filter(MerchantAlias.user_id == current_user.get_uuid())
+        .filter(MerchantAlias.pattern.ilike(f"%{query}%"))
+        .all()
+    )
+    logging.info(
+        f"Buscando aliases com query '{query}' pelo usuário {current_user.get_uuid()}"
+    )
+    return aliases
