@@ -56,6 +56,8 @@ class Payment(Base):
 
     # Relationships
     category = relationship("Category", lazy="joined")
+    merchant = relationship("Merchant", lazy="joined")
+    bank = relationship("Bank", lazy="joined")
 
     def __repr__(self):
         return f"<Payment(date='{self.date}', title='{self.title}', amount='{self.amount}', category_id='{self.category_id}')>"

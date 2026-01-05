@@ -7,6 +7,8 @@ from src.entities.payment import Payment
 from decimal import Decimal
 from src.entities.payment import PaymentMethod
 from src.categories.model import CategoryResponse
+from src.merchants.model import MerchantResponse
+from src.banks.model import BankResponse
 
 
 class PaymentMethodSchema(CamelModel):
@@ -39,6 +41,8 @@ class PaymentResponse(PaymentBase):
     id: UUID
     user_id: UUID
     merchant_id: Optional[UUID] = None
+    merchant: Optional[MerchantResponse] = None
+    bank: Optional[BankResponse] = None
     category: CategoryResponse
     payment_method: PaymentMethodSchema
 
