@@ -37,6 +37,7 @@ class Payment(Base):
     bank_id = Column(UUID(as_uuid=True), ForeignKey("banks.id"), nullable=False)
     date = Column(Date, nullable=False)
     title = Column(String, nullable=False)
+    description = Column(String, nullable=True)
     amount = Column(DECIMAL, nullable=False)
     payment_method = Column(
         Enum(PaymentMethod), nullable=False, default=PaymentMethod.Pix

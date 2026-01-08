@@ -10,6 +10,8 @@ class Category(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False, unique=True)
+    slug = Column(String, nullable=False, unique=True)
+    color_hex = Column(String, nullable=False)
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
@@ -21,4 +23,4 @@ class Category(Base):
     )
 
     def __repr__(self):
-        return f"<Category(name='{self.name}')>"
+        return f"<Category(name='{self.name}', slug='{self.slug}', color_hex='{self.color_hex}')>"
