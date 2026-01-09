@@ -43,7 +43,7 @@ class Payment(Base):
         Enum(PaymentMethod), nullable=False, default=PaymentMethod.Pix
     )
     category_id = Column(
-        UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("categories.id", ondelete="RESTRICT"), nullable=False
     )
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)

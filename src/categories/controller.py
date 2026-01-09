@@ -42,3 +42,13 @@ async def update_category(
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_category(db: DbSession, category_id: UUID, current_user: CurrentUser):
     return service.delete_category(current_user, db, category_id)
+
+
+@router.patch("/{category_id}/color", response_model=model.CategoryResponse)
+async def update_category_color(
+    db: DbSession,
+    category_id: UUID,
+    color_update: model.CategoryColorUpdate,
+    current_user: CurrentUser,
+):
+    return service.update_category_color(current_user, db, category_id, color_update)
