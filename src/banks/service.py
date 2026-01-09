@@ -6,13 +6,14 @@ from . import model
 from ..entities.bank import Bank
 from ..exceptions.banks import BankCreationError, BankNotFoundError
 import logging
-
+from slugify import slugify
 
 from ..auth.model import TokenData
 
 
 def create_bank(current_user: TokenData, db: Session, bank: model.BankCreate) -> Bank:
     try:
+        bank.slug = slugify(bank.name)
         new_bank = Bank(**bank.model_dump())
         db.add(new_bank)
         db.commit()
@@ -51,6 +52,8 @@ def update_bank(
     current_user: TokenData, db: Session, bank_id: UUID, bank_update: model.BankUpdate
 ) -> Bank:
     bank_data = bank_update.model_dump(exclude_unset=True)
+    bank_data["slug"] = slugify(bank_update.name)
+    
     db.query(Bank).filter(Bank.id == bank_id).update(bank_data)
     db.commit()
     logging.info(f"Banco atualizado com sucesso pelo usuário {current_user.get_uuid()}")

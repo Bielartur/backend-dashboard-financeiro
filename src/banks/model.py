@@ -7,8 +7,7 @@ from src.schemas.base import CamelModel
 
 class BankBase(CamelModel):
     name: str
-    slug: str
-    is_active: bool = True
+    slug: Optional[str] = None
     logo_url: str
     color_hex: constr(pattern=r"^#[0-9A-Fa-f]{6}$")  # Validação de cor hex
 
@@ -19,7 +18,6 @@ class BankCreate(BankBase):
 
 class BankUpdate(CamelModel):
     name: Optional[str] = None
-    slug: Optional[str] = None
     is_active: Optional[bool] = None
     logo_url: Optional[str] = None
     color_hex: Optional[constr(pattern=r"^#[0-9A-Fa-f]{6}$")] = None
@@ -27,5 +25,7 @@ class BankUpdate(CamelModel):
 
 class BankResponse(BankBase):
     id: UUID
+    is_active: bool = True
+
     created_at: datetime
     updated_at: datetime
