@@ -20,4 +20,5 @@ dependencies = [
     "python-multipart>=0.0.20",
     "slowapi>=0.1.9",
     "sqlalchemy-utils>=0.42.1",
+    "python-slugify>=8.0.4",
 ]
