@@ -1,6 +1,7 @@
 from datetime import datetime, date
 from typing import Optional
 from uuid import UUID
+from enum import Enum
 from pydantic import Field, field_validator
 from src.schemas.base import CamelModel
 from src.entities.payment import Payment
@@ -52,3 +53,15 @@ class PaymentResponse(PaymentBase):
         if isinstance(v, PaymentMethod):
             return PaymentMethodSchema(value=v.value, display_name=v.display_name)
         return v
+
+
+class ImportSource(str, Enum):
+    NUBANK = "nubank"
+    ITAU = "itau"
+
+
+class PaymentImportResponse(CamelModel):
+    date: date
+    title: str
+    amount: Decimal
+    category: Optional[CategoryResponse] = None

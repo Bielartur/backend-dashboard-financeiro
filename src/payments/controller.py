@@ -1,4 +1,4 @@
-from fastapi import APIRouter, status
+from fastapi import UploadFile, File, APIRouter, status
 from typing import List, Optional
 from uuid import UUID
 from datetime import date
@@ -61,10 +61,25 @@ async def get_payment(db: DbSession, payment_id: UUID, current_user: CurrentUser
 
 
 @router.put("/{payment_id}", response_model=model.PaymentResponse)
-async def update_payment(db: DbSession, payment_id: UUID, payment_update: model.PaymentUpdate, current_user: CurrentUser):
+async def update_payment(
+    db: DbSession,
+    payment_id: UUID,
+    payment_update: model.PaymentUpdate,
+    current_user: CurrentUser,
+):
     return service.update_payment(current_user, db, payment_id, payment_update)
 
 
 @router.delete("/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_payment(db: DbSession, payment_id: UUID, current_user: CurrentUser):
     return service.delete_payment(current_user, db, payment_id)
+
+
+@router.post("/import/{source}", response_model=List[model.PaymentImportResponse])
+async def import_payments(
+    source: model.ImportSource,
+    file: UploadFile = File(...),
+    db: DbSession = DbSession,
+    current_user: CurrentUser = CurrentUser,
+):
+    return await service.import_payments_from_csv(current_user, db, file, source)

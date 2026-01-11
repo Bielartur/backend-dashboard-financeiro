@@ -1,15 +1,21 @@
 from datetime import datetime, timezone, date
 from uuid import uuid4, UUID
-from typing import Optional
+from typing import Optional, List
 from decimal import Decimal
 from sqlalchemy.orm import Session
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from . import model
+from .parsers import get_parser
 from ..auth.model import TokenData
 from ..entities.payment import Payment, PaymentMethod
 from ..entities.merchant import Merchant
+from ..entities.category import Category
 from ..entities.merchant_alias import MerchantAlias
-from ..exceptions.payments import PaymentCreationError, PaymentNotFoundError
+from ..exceptions.payments import (
+    PaymentCreationError,
+    PaymentNotFoundError,
+    PaymentImportError,
+)
 import logging
 
 
@@ -207,3 +213,44 @@ def delete_payment(current_user: TokenData, db: Session, payment_id: UUID) -> No
     logging.info(
         f"Pagamento de ID {payment_id} foi excluído pelo o usuário de ID {current_user.get_uuid()}"
     )
+
+
+async def import_payments_from_csv(
+    current_user: TokenData, db: Session, file: UploadFile, source: model.ImportSource
+) -> List[model.PaymentImportResponse]:
+    try:
+        parser = get_parser(source)
+        transactions = await parser.parse(file)
+
+    except Exception as e:
+        logging.error(f"Erro ao importar pagamentos: {str(e)}")
+        raise PaymentImportError(str(e))
+
+    enriched_transactions = []
+
+    for transaction in transactions:
+        # Busca Merchant e Category explicitamente fazendo um LEFT JOIN
+        # Retorna uma tupla: (Merchant, Category)
+        # Isso evita alterar o model Merchant e evita n+1 queries
+
+        result = (
+            db.query(Merchant, Category)
+            .outerjoin(Category, Merchant.category_id == Category.id)
+            .filter(Merchant.name == transaction.title)
+            .filter(Merchant.user_id == current_user.get_uuid())
+            .first()
+        )
+
+        category_response = None
+
+        if result:
+            merchant, category = result
+            if category:
+                from ..categories.model import CategorySimpleResponse as CategorySchema
+
+                category_response = CategorySchema.model_validate(category)
+
+        transaction.category = category_response
+        enriched_transactions.append(transaction)
+
+    return enriched_transactions

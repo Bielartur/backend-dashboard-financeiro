@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 
+
 class PaymentError(HTTPException):
     """Exceção base para erros relacionados às tarefas"""
 
@@ -20,4 +21,11 @@ class PaymentCreationError(PaymentError):
     def __init__(self, error: str):
         super().__init__(
             status_code=500, detail=f"Falha na criação do pagamento: {error}"
+        )
+
+
+class PaymentImportError(PaymentError):
+    def __init__(self, error: str):
+        super().__init__(
+            status_code=400, detail=f"Erro na importação de pagamentos: {error}"
         )
