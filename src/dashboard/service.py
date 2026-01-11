@@ -1,0 +1,282 @@
+from datetime import date, timedelta
+from decimal import Decimal
+from typing import List, Dict, Tuple, Any
+from sqlalchemy.orm import Session
+from sqlalchemy import select, func, case, extract, and_
+from dateutil.relativedelta import relativedelta
+
+from src.entities.payment import Payment
+from src.entities.category import Category, CategoryType
+from src.dashboard.model import (
+    DashboardResponse,
+    DashboardSummary,
+    MonthlyData,
+    CategoryMetric,
+)
+
+# Local Helpers for Month Names
+MONTH_NAMES = {
+    1: "Janeiro",
+    2: "Fevereiro",
+    3: "Março",
+    4: "Abril",
+    5: "Maio",
+    6: "Junho",
+    7: "Julho",
+    8: "Agosto",
+    9: "Setembro",
+    10: "Outubro",
+    11: "Novembro",
+    12: "Dezembro",
+}
+
+MONTH_SHORT = {
+    1: "Jan",
+    2: "Fev",
+    3: "Mar",
+    4: "Abr",
+    5: "Mai",
+    6: "Jun",
+    7: "Jul",
+    8: "Ago",
+    9: "Set",
+    10: "Out",
+    11: "Nov",
+    12: "Dez",
+}
+
+
+def get_dashboard_data(
+    db: Session, user_id: str, year_mode: str = "last-12"
+) -> DashboardResponse:
+    """
+    Main orchestration function for dashboard data.
+    """
+    start_date, end_date = _get_date_range(year_mode)
+
+    # 1. Global Summary (Aggregated in DB)
+    summary = _get_global_summary(db, user_id, start_date, end_date)
+
+    # 2. Rolling Averages for Categories (for comparison metrics)
+    # Always calculates based on the last 12 months relative to today, to be fair.
+    rolling_averages = _get_category_rolling_averages(db, user_id)
+
+    # 3. Monthly Breakdown with Category Data (Aggregated in DB)
+    months_data = _get_monthly_breakdown(
+        db, user_id, start_date, end_date, rolling_averages
+    )
+
+    return DashboardResponse(summary=summary, months=months_data)
+
+
+def _get_date_range(year_mode: str) -> Tuple[date, date]:
+    today = date.today()
+    if year_mode == "last-12":
+        # First day of the month, 11 months ago
+        start_date = today.replace(day=1) - relativedelta(months=11)
+        # Last day of current month (or just go far into future, sticking to today is safer for 'history')
+        # Actually Dashboard usually shows current month in progress.
+        # Let's verify end of current month
+        end_date = (today.replace(day=1) + relativedelta(months=1)) - timedelta(days=1)
+    else:
+        try:
+            year = int(year_mode)
+            start_date = date(year, 1, 1)
+            end_date = date(year, 12, 31)
+        except ValueError:
+            # Fallback to current year
+            start_date = date(today.year, 1, 1)
+            end_date = date(today.year, 12, 31)
+
+    return start_date, end_date
+
+
+def _get_global_summary(
+    db: Session, user_id: Any, start_date: date, end_date: date
+) -> DashboardSummary:
+    """
+    Calculates total revenue and expenses entirely in SQL.
+    """
+    # Join Category to filter by type
+    statement = (
+        select(Category.type, func.sum(Payment.amount).label("total"))
+        .join(Category, Payment.category_id == Category.id)
+        .where(
+            Payment.user_id == user_id,
+            Payment.date >= start_date,
+            Payment.date <= end_date,
+        )
+        .group_by(Category.type)
+    )
+
+    results = db.execute(statement).all()
+
+    total_revenue = Decimal(0)
+    total_expenses = Decimal(0)
+
+    for category_type, total in results:
+        total = (total or Decimal(0)).quantize(Decimal("0.01"))
+        if category_type == CategoryType.INCOME:
+            total_revenue += total
+        elif category_type == CategoryType.EXPENSE:
+            total_expenses += total
+
+    return DashboardSummary(
+        total_revenue=total_revenue.quantize(Decimal("0.01")),
+        total_expenses=total_expenses.quantize(Decimal("0.01")),
+        balance=(total_revenue - total_expenses).quantize(Decimal("0.01")),
+    )
+
+
+def _get_category_rolling_averages(db: Session, user_id: Any) -> Dict[str, Decimal]:
+    """
+    Calculates the average monthly spending per category over the last 12 months.
+    Formula: Total Spent / 12 (Simple moving average)
+    """
+    today = date.today()
+    start_date = today.replace(day=1) - relativedelta(months=11)
+
+    statement = (
+        select(Category.id, func.sum(Payment.amount).label("total"))
+        .join(Category, Payment.category_id == Category.id)
+        .where(Payment.user_id == user_id, Payment.date >= start_date)
+        .group_by(Category.id)
+    )
+
+    results = db.execute(statement).all()
+
+    # Map category_id -> average
+    return {
+        row.id: (row.total / Decimal(12)).quantize(Decimal("0.01")) for row in results
+    }
+
+
+def _fill_missing_months(
+    start_date: date, end_date: date, existing_data: Dict[Tuple[int, int], Any]
+) -> List[MonthlyData]:
+    """
+    Ensures all months in the range exist in the output, even if empty.
+    """
+    filled_data = []
+
+    current_date = start_date.replace(day=1)
+    while current_date <= end_date:
+        key = (current_date.year, current_date.month)
+
+        if key in existing_data:
+            filled_data.append(existing_data[key])
+        else:
+            # Create empty month record
+            filled_data.append(
+                MonthlyData(
+                    month=MONTH_NAMES.get(current_date.month, ""),
+                    month_short=MONTH_SHORT.get(current_date.month, ""),
+                    year=current_date.year,
+                    revenue=Decimal(0),
+                    expenses=Decimal(0),
+                    balance=Decimal(0),
+                    categories=[],
+                )
+            )
+
+        # Next month
+        current_date = current_date + relativedelta(months=1)
+
+    return filled_data
+
+
+def _get_monthly_breakdown(
+    db: Session,
+    user_id: Any,
+    start_date: date,
+    end_date: date,
+    averages_map: Dict[str, Decimal],
+) -> List[MonthlyData]:
+    """
+    Fetches monthly data grouped by (Month, Category) via SQL Aggregation.
+    """
+
+    # Query: Year, Month, Category Details, Sum(Amount)
+    statement = (
+        select(
+            extract("year", Payment.date).label("year"),
+            extract("month", Payment.date).label("month"),
+            Category,
+            func.sum(Payment.amount).label("total"),
+        )
+        .join(Category, Payment.category_id == Category.id)
+        .where(
+            Payment.user_id == user_id,
+            Payment.date >= start_date,
+            Payment.date <= end_date,
+        )
+        .group_by(
+            extract("year", Payment.date), extract("month", Payment.date), Category.id
+        )
+    )
+
+    results = db.execute(statement).all()
+
+    # Process results into a dictionary first to aggregate categories into months
+    # Struct: {(year, month): { 'revenue': 0, 'expenses': 0, 'categories': [] }}
+    month_map = {}
+
+    for year_val, month_val, category, total in results:
+        total = (total or Decimal(0)).quantize(Decimal("0.01"))
+        year = int(year_val)
+        month = int(month_val)
+        key = (year, month)
+
+        if key not in month_map:
+            month_map[key] = {
+                "month_obj": MonthlyData(
+                    month=MONTH_NAMES.get(month, ""),
+                    month_short=MONTH_SHORT.get(month, ""),
+                    year=year,
+                    revenue=Decimal(0),
+                    expenses=Decimal(0),
+                    balance=Decimal(0),
+                    categories=[],
+                )
+            }
+
+        data = month_map[key]["month_obj"]
+
+        # Update Totals
+        if category.type == CategoryType.INCOME:
+            data.revenue += total
+        elif category.type == CategoryType.EXPENSE:
+            data.expenses += total
+
+        data.balance = (data.revenue - data.expenses).quantize(Decimal("0.01"))
+
+        # Determine Status
+        average = averages_map.get(category.id, Decimal(0))
+        status = "average"
+        if average > 0:
+            if total > average * Decimal("1.1"):
+                status = "above_average"
+            elif total < average * Decimal("0.9"):
+                status = "below_average"
+
+        # Add Category Metric
+        data.categories.append(
+            CategoryMetric(
+                name=category.name,
+                slug=category.slug,
+                color_hex=category.color_hex,
+                type=category.type,
+                total=total.quantize(Decimal("0.01")),
+                average=average.quantize(Decimal("0.01")),
+                status=status,
+            )
+        )
+
+    # Fill gaps (empty months)
+    final_list = _fill_missing_months(
+        start_date,
+        end_date,
+        {key: value["month_obj"] for key, value in month_map.items()},
+    )
+
+    return final_list
