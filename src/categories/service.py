@@ -11,13 +11,14 @@ from ..entities.payment import Payment
 from ..exceptions.categories import CategoryCreationError, CategoryNotFoundError
 import logging
 from ..entities.category import Category, UserCategorySetting
+from slugify import slugify
 
 
 def create_category(
     current_user: TokenData, db: Session, category: model.CategoryCreate
 ) -> Category:
     try:
-        new_category = Category(**category.model_dump())
+        new_category = Category(**category.model_dump(), slug=slugify(category.name))
         db.add(new_category)
         db.commit()
         db.refresh(new_category)
@@ -36,13 +37,15 @@ def create_category(
 
         raise CategoryCreationError(str(e.orig))
 
+
 def get_categories(
     current_user: TokenData, db: Session
 ) -> list[model.CategoryResponse]:
-    # Query prioritizing UserCategorySetting color over Category color
     query = db.query(
         Category.id,
         Category.name,
+        Category.slug,
+        Category.type,
         func.coalesce(UserCategorySetting.color_hex, Category.color_hex).label(
             "color_hex"
         ),
@@ -54,29 +57,23 @@ def get_categories(
         & (UserCategorySetting.user_id == current_user.get_uuid()),
     )
 
-    results = query.all()
+    logging.info(
+        f"Recuperado todas as categorias pelo usuário {current_user.get_uuid()}"
+    )
 
-    # Map Row results to Pydantic model
-    return [
-        model.CategoryResponse(
-            id=row.id,
-            name=row.name,
-            color_hex=row.color_hex,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-        )
-        for row in results
-    ]
+    results = query.all()
+    return results
 
 
 def get_category_by_id(
     current_user: TokenData, db: Session, category_id: UUID
-) -> model.CategoryResponse:  # Returning Response model to support color overlay
-    # Similar logic for single fetch
+) -> model.CategoryResponse:
     query = (
         db.query(
             Category.id,
             Category.name,
+            Category.slug,
+            Category.type,
             func.coalesce(UserCategorySetting.color_hex, Category.color_hex).label(
                 "color_hex"
             ),
@@ -106,6 +103,8 @@ def get_category_by_id(
     return model.CategoryResponse(
         id=category.id,
         name=category.name,
+        slug=category.slug,
+        type=category.type,
         color_hex=category.color_hex,
         created_at=category.created_at,
         updated_at=category.updated_at,
@@ -117,12 +116,7 @@ def update_category(
     db: Session,
     category_id: UUID,
     category_update: model.CategoryUpdate,
-) -> model.CategoryResponse:  # Returning Response model matches logic
-    # Note: If admin updates global category, it affects everyone.
-    # But usually this endpoint updates global category.
-    # If the requirement was "users can rename too", we would use UserCategorySetting for name too.
-    # For now assuming this updates global.
-
+) -> model.CategoryResponse:
     # First get original to verify existence
     original_category = db.query(Category).filter(Category.id == category_id).first()
     if not original_category:
@@ -130,16 +124,9 @@ def update_category(
 
     category_data = category_update.model_dump(exclude_unset=True)
 
-    # If updating color, are we updating GLOBAL color or USER color?
-    # Based on the user request, users choose their own color.
-    # The pure 'update_category' usually implies Admin updating the base entity.
-    # However, for safety, if we want to support user preference here too, it's tricky.
-    # Let's assume this endpoint remains for ADMIN GLOBAL updates as per "Categories defined by admin".
-
     db.query(Category).filter(Category.id == category_id).update(category_data)
     db.commit()
 
-    # Return using our reading logic to show correct applied color
     return get_category_by_id(current_user, db, category_id)
 
 

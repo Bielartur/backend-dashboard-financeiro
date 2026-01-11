@@ -21,4 +21,5 @@ dependencies = [
     "slowapi>=0.1.9",
     "sqlalchemy-utils>=0.42.1",
     "python-slugify>=8.0.4",
+    "python-dateutil>=2.9.0.post0",
 ]

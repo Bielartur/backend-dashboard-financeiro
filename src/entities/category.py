@@ -1,8 +1,18 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, String, DateTime, ForeignKey, UniqueConstraint, Enum
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
+import enum
 from datetime import datetime, timezone
 from ..database.core import Base
+
+
+class CategoryType(enum.Enum):
+    INCOME = "income"
+    EXPENSE = "expense"
+
+    @property
+    def display_name(self):
+        return "Receita" if self == CategoryType.INCOME else "Despesa"
 
 
 class Category(Base):
@@ -10,7 +20,9 @@ class Category(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False, unique=True)
+    slug = Column(String, nullable=False, unique=True)
     color_hex = Column(String, nullable=False)
+    type = Column(Enum(CategoryType), nullable=False, default=CategoryType.EXPENSE)
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
@@ -22,7 +34,7 @@ class Category(Base):
     )
 
     def __repr__(self):
-        return f"<Category(name='{self.name}', color_hex='{self.color_hex}')>"
+        return f"<Category(name='{self.name}', type='{self.type}', color_hex='{self.color_hex}')>"
 
 
 class UserCategorySetting(Base):

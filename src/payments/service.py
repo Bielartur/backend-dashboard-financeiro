@@ -173,15 +173,31 @@ def update_payment(
     payment_id: UUID,
     payment_update: model.PaymentUpdate,
 ) -> Payment:
+    # Fetch existing payment to compare
+    current_payment = get_payment_by_id(current_user, db, payment_id)
+
     payment_data = payment_update.model_dump(exclude_unset=True)
+
+    # Filter None values and values that haven't changed
+    changes = {
+        k: v
+        for k, v in payment_data.items()
+        if v is not None and getattr(current_payment, k) != v
+    }
+
+    if not changes:
+        return current_payment
+
     db.query(Payment).filter(Payment.id == payment_id).filter(
         Payment.user_id == current_user.get_uuid()
-    ).update(payment_data)
+    ).update(changes)
     db.commit()
+    db.refresh(current_payment)
+
     logging.info(
         f"Pagamento atualizado com sucesso para o usuário de ID: {current_user.get_uuid()}"
     )
-    return get_payment_by_id(current_user, db, payment_id)
+    return current_payment
 
 
 def delete_payment(current_user: TokenData, db: Session, payment_id: UUID) -> None:

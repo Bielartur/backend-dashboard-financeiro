@@ -14,7 +14,7 @@ class Merchant(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    name = Column(String, nullable=False)
+    name = Column(String, nullable=False, unique=True)
     merchant_alias_id = Column(
         UUID(as_uuid=True), ForeignKey("merchant_aliases.id"), nullable=False
     )
