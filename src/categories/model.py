@@ -33,3 +33,7 @@ class CategoryResponse(CategoryBase):
 
     created_at: datetime
     updated_at: datetime
+
+class CategorySimpleResponse(CategoryBase):
+    id: UUID
+    slug: str
