@@ -61,8 +61,8 @@ async def get_payment(db: DbSession, payment_id: UUID, current_user: CurrentUser
 
 
 @router.put("/{payment_id}", response_model=model.PaymentResponse)
-async def update_payment(db: DbSession, payment_id: UUID, current_user: CurrentUser):
-    return service.update_payment(current_user, db, payment_id)
+async def update_payment(db: DbSession, payment_id: UUID, payment_update: model.PaymentUpdate, current_user: CurrentUser):
+    return service.update_payment(current_user, db, payment_id, payment_update)
 
 
 @router.delete("/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
