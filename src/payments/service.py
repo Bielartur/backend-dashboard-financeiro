@@ -196,11 +196,15 @@ def create_payment(
         raise PaymentCreationError(str(e))
 
 
+from ..schemas.pagination import PaginatedResponse
+
+
 def search_payments(
     current_user: TokenData,
     db: Session,
     query: str,
-    limit: int = 20,
+    page: int = 1,
+    limit: int = 12,
     payment_method: Optional[str] = None,
     category_id: Optional[UUID] = None,
     bank_id: Optional[UUID] = None,
@@ -208,7 +212,7 @@ def search_payments(
     end_date: Optional[date] = None,
     min_amount: Optional[Decimal] = None,
     max_amount: Optional[Decimal] = None,
-) -> list[model.PaymentResponse]:
+) -> PaginatedResponse[model.PaymentResponse]:
     query_filter = db.query(Payment).filter(Payment.user_id == current_user.get_uuid())
 
     if query:
@@ -220,7 +224,6 @@ def search_payments(
             query_filter = query_filter.filter(Payment.payment_method == method_enum)
         except ValueError:
             logging.warning(f"Método de pagamento inválido recebido: {payment_method}")
-            # Opcional: retornar lista vazia ou ignorar o filtro
             pass
 
     if category_id:
@@ -241,22 +244,22 @@ def search_payments(
     if max_amount is not None:
         query_filter = query_filter.filter(Payment.amount <= max_amount)
 
-    payments = query_filter.order_by(Payment.date.desc()).limit(limit).all()
+    # Calculate total before pagination
+    total = query_filter.count()
 
-    logging.info(
-        f"Buscando pagamentos com filtros avançados para o usuário de ID: {current_user.get_uuid()}"
-    )
-    return payments
+    # Calculate offset
+    offset = (page - 1) * limit
 
-
-def get_payments(current_user: TokenData, db: Session) -> list[model.PaymentResponse]:
+    # Apply pagination
     payments = (
-        db.query(Payment).filter(Payment.user_id == current_user.get_uuid()).all()
+        query_filter.order_by(Payment.date.desc()).offset(offset).limit(limit).all()
     )
+
     logging.info(
-        f"Recuperado todos os pagamentos para o usuário de ID: {current_user.get_uuid()}"
+        f"Buscando pagamentos com filtros avançados para o usuário de ID: {current_user.get_uuid()} (Página {page})"
     )
-    return payments
+
+    return PaginatedResponse.create(items=payments, total=total, page=page, size=limit)
 
 
 def get_payment_by_id(

@@ -8,6 +8,8 @@ from ..database.core import DbSession
 from . import model
 from . import service
 from ..auth.service import CurrentUser
+from src.schemas.pagination import PaginatedResponse
+
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 
@@ -32,16 +34,12 @@ async def bulk_create_payment(
     return service.bulk_create_payment(current_user, db, payments)
 
 
-@router.get("/", response_model=List[model.PaymentResponse])
-async def get_payments(db: DbSession, current_user: CurrentUser):
-    return service.get_payments(current_user, db)
-
-
-@router.get("/search", response_model=List[model.PaymentResponse])
-async def search_payments(
+@router.get("/search", response_model=PaginatedResponse[model.PaymentResponse])
+def search_payments(
     db: DbSession,
     current_user: CurrentUser,
-    query: str = "",
+    query: Optional[str] = None,
+    page: int = 1,
     limit: int = 20,
     payment_method: Optional[str] = None,
     category_id: Optional[UUID] = None,
@@ -55,6 +53,7 @@ async def search_payments(
         current_user,
         db,
         query,
+        page,
         limit,
         payment_method,
         category_id,
