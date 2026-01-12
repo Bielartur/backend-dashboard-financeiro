@@ -10,6 +10,7 @@ from src.entities.category import Category, CategoryType
 from src.dashboard.model import (
     DashboardResponse,
     DashboardSummary,
+    DashboardAvailableMonth,
     MonthlyData,
     CategoryMetric,
 )
@@ -299,3 +300,29 @@ def _get_monthly_breakdown(
 
     sorted_keys = sorted(monthly_map.keys())
     return [monthly_map[k] for k in sorted_keys]
+
+
+def get_available_months(db: Session, user_id: Any) -> List[DashboardAvailableMonth]:
+    """
+    Returns a list of years where the user has payments, plus 'last-12'.
+    """
+    # Query distinct years from payments
+    statement = (
+        select(distinct(extract("year", Payment.date)).label("year"))
+        .where(Payment.user_id == user_id)
+        .order_by(desc("year"))
+    )
+
+    results = db.execute(statement).all()
+
+    available_options = [
+        DashboardAvailableMonth(label="Últimos 12 meses", value="last-12")
+    ]
+
+    for row in results:
+        year = int(row.year)
+        available_options.append(
+            DashboardAvailableMonth(label=str(year), value=str(year))
+        )
+
+    return available_options
