@@ -11,6 +11,12 @@ class DashboardSummary(CamelModel):
     total_investments: Decimal = Decimal(0)
 
 
+class DashboardAvailableMonth(CamelModel):
+    year: int
+    month: int
+    label: str
+
+
 class CategoryMetric(CamelModel):
     name: str
     slug: str
