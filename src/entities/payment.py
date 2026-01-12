@@ -1,4 +1,12 @@
-from sqlalchemy import Column, String, Date, DateTime, ForeignKey, DECIMAL
+from sqlalchemy import (
+    Column,
+    String,
+    Date,
+    DateTime,
+    ForeignKey,
+    DECIMAL,
+    CheckConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -27,6 +35,9 @@ class PaymentMethod(enum.Enum):
 
 class Payment(Base):
     __tablename__ = "payments"
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="check_payment_amount_positive"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
@@ -43,7 +54,9 @@ class Payment(Base):
         Enum(PaymentMethod), nullable=False, default=PaymentMethod.Pix
     )
     category_id = Column(
-        UUID(as_uuid=True), ForeignKey("categories.id", ondelete="RESTRICT"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("categories.id", ondelete="RESTRICT"),
+        nullable=False,
     )
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)

@@ -21,6 +21,17 @@ async def create_payment(
     return service.create_payment(current_user, db, payment)
 
 
+@router.post(
+    "/bulk",
+    response_model=List[model.PaymentResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+async def bulk_create_payment(
+    db: DbSession, payments: List[model.PaymentCreate], current_user: CurrentUser
+):
+    return service.bulk_create_payment(current_user, db, payments)
+
+
 @router.get("/", response_model=List[model.PaymentResponse])
 async def get_payments(db: DbSession, current_user: CurrentUser):
     return service.get_payments(current_user, db)

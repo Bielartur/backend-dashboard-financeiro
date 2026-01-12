@@ -20,19 +20,20 @@ class PaymentMethodSchema(CamelModel):
 class PaymentBase(CamelModel):
     title: str
     date: date
-    amount: Decimal = Field(decimal_places=2, max_digits=10)
+    amount: Decimal = Field(decimal_places=2, max_digits=10, ge=0)
     payment_method: PaymentMethod = PaymentMethod.Pix
     bank_id: UUID
 
 
 class PaymentCreate(PaymentBase):
     category_id: Optional[UUID] = None
+    has_merchant: bool = True
 
 
 class PaymentUpdate(CamelModel):
     title: Optional[str] = None
     date: Optional[datetime] = None
-    amount: Optional[Decimal] = Field(None, decimal_places=2, max_digits=10)
+    amount: Optional[Decimal] = Field(None, decimal_places=2, max_digits=10, ge=0)
     payment_method: Optional[PaymentMethod] = None
     bank_id: Optional[UUID] = None
     category_id: Optional[UUID] = None
@@ -42,6 +43,7 @@ class PaymentResponse(PaymentBase):
     id: UUID
     user_id: UUID
     merchant_id: Optional[UUID] = None
+    has_merchant: bool = True
     merchant: Optional[MerchantResponse] = None
     bank: Optional[BankResponse] = None
     category: CategoryResponse
@@ -65,3 +67,5 @@ class PaymentImportResponse(CamelModel):
     title: str
     amount: Decimal
     category: Optional[CategoryResponse] = None
+    has_merchant: bool = True
+    already_exists: bool = False
