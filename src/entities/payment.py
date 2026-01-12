@@ -40,14 +40,18 @@ class Payment(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     # Normalização
     merchant_id = Column(UUID(as_uuid=True), ForeignKey("merchants.id"), nullable=True)
 
-    bank_id = Column(UUID(as_uuid=True), ForeignKey("banks.id"), nullable=False)
-    date = Column(Date, nullable=False)
-    title = Column(String, nullable=False)
+    bank_id = Column(
+        UUID(as_uuid=True), ForeignKey("banks.id"), nullable=False, index=True
+    )
+    date = Column(Date, nullable=False, index=True)
+    title = Column(String, nullable=False, index=True)
     description = Column(String, nullable=True)
     amount = Column(DECIMAL, nullable=False)
     payment_method = Column(
