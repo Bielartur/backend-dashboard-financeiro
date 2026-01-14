@@ -20,6 +20,9 @@ class PaymentMethod(enum.Enum):
     Pix = "pix"
     CreditCard = "credit_card"
     DebitCard = "debit_card"
+    Boleto = "boleto"
+    BillPayment = "bill_payment"
+    InvestmentRedemption = "investment_redemption"
     Other = "other"
 
     @property
@@ -28,6 +31,9 @@ class PaymentMethod(enum.Enum):
             "pix": "Pix",
             "credit_card": "Cartão de Crédito",
             "debit_card": "Cartão de Débito",
+            "boleto": "Boleto",
+            "bill_payment": "Pagamento de Fatura",
+            "investment_redemption": "Resgate de Investimento",
             "other": "Outro",
         }
         return labels.get(self.value, self.value)

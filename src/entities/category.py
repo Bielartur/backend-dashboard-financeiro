@@ -9,10 +9,15 @@ from ..database.core import Base
 class CategoryType(enum.Enum):
     INCOME = "income"
     EXPENSE = "expense"
+    NEUTRAL = "neutral"
 
     @property
     def display_name(self):
-        return "Receita" if self == CategoryType.INCOME else "Despesa"
+        return (
+            "Receita"
+            if self == CategoryType.INCOME
+            else "Despesa" if self == CategoryType.EXPENSE else "Neutra"
+        )
 
 
 class Category(Base):
@@ -22,7 +27,11 @@ class Category(Base):
     name = Column(String, nullable=False, unique=True)
     slug = Column(String, nullable=False, unique=True)
     color_hex = Column(String, nullable=False)
-    type = Column(Enum(CategoryType), nullable=False, default=CategoryType.EXPENSE)
+    type = Column(
+        Enum(CategoryType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=CategoryType.EXPENSE,
+    )
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
