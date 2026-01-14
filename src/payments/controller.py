@@ -29,9 +29,12 @@ async def create_payment(
     status_code=status.HTTP_201_CREATED,
 )
 async def bulk_create_payment(
-    db: DbSession, payments: List[model.PaymentCreate], current_user: CurrentUser
+    db: DbSession,
+    payments: List[model.PaymentCreate],
+    current_user: CurrentUser,
+    import_type: Optional[model.ImportType] = None,
 ):
-    return service.bulk_create_payment(current_user, db, payments)
+    return service.bulk_create_payment(current_user, db, payments, import_type)
 
 
 @router.get("/search", response_model=PaginatedResponse[model.PaymentResponse])
@@ -40,7 +43,7 @@ def search_payments(
     current_user: CurrentUser,
     query: Optional[str] = None,
     page: int = 1,
-    limit: int = 20,
+    limit: int = 12,
     payment_method: Optional[str] = None,
     category_id: Optional[UUID] = None,
     bank_id: Optional[UUID] = None,
@@ -88,8 +91,9 @@ async def delete_payment(db: DbSession, payment_id: UUID, current_user: CurrentU
 @router.post("/import/{source}", response_model=List[model.PaymentImportResponse])
 async def import_payments(
     source: model.ImportSource,
+    type: model.ImportType = model.ImportType.CREDIT_CARD_INVOICE,
     file: UploadFile = File(...),
     db: DbSession = DbSession,
     current_user: CurrentUser = CurrentUser,
 ):
-    return await service.import_payments_from_csv(current_user, db, file, source)
+    return await service.import_payments_from_csv(current_user, db, file, source, type)
