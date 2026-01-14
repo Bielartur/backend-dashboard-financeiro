@@ -21,11 +21,12 @@ class PaymentBase(CamelModel):
     title: str
     date: date
     amount: Decimal = Field(decimal_places=2, max_digits=10, ge=0)
-    payment_method: PaymentMethod = PaymentMethod.Pix
+    payment_method: Optional[PaymentMethod] = None
     bank_id: UUID
 
 
 class PaymentCreate(PaymentBase):
+    id: Optional[UUID] = None
     category_id: Optional[UUID] = None
     has_merchant: bool = True
 
@@ -62,10 +63,37 @@ class ImportSource(str, Enum):
     ITAU = "itau"
 
 
+class ImportType(str, Enum):
+    CREDIT_CARD_INVOICE = "invoice"
+    BANK_STATEMENT = "statement"
+
+
 class PaymentImportResponse(CamelModel):
+    id: Optional[UUID] = None
     date: date
     title: str
     amount: Decimal
     category: Optional[CategoryResponse] = None
     has_merchant: bool = True
     already_exists: bool = False
+    payment_method: Optional[PaymentMethodSchema] = None
+
+    @field_validator("payment_method", mode="before")
+    @classmethod
+    def convert_payment_method(cls, v):
+        # Already a schema?
+        if isinstance(v, dict) and "value" in v and "display_name" in v:
+            return v
+
+        # Is it an ID string? (not expected for import response but possible)
+        if isinstance(v, str):
+            try:
+                v = PaymentMethod(v)
+            except ValueError:
+                return None
+
+        # Convert Enum to Schema
+        if isinstance(v, PaymentMethod):
+            return PaymentMethodSchema(value=v.value, display_name=v.display_name)
+
+        return v

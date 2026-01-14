@@ -24,7 +24,10 @@ from sqlalchemy import insert
 
 
 def bulk_create_payment(
-    current_user: TokenData, db: Session, payments_data: List[model.PaymentCreate]
+    current_user: TokenData,
+    db: Session,
+    payments_data: List[model.PaymentCreate],
+    import_type: Optional[model.ImportType] = None,
 ) -> List[Payment]:
     # Preparar dados para inserção em massa à la Django bulk_create
     payments_dicts = []
@@ -73,12 +76,24 @@ def bulk_create_payment(
                     continue
 
                 data = payment_data.model_dump()
+                if data.get("payment_method") is None:
+                    del data["payment_method"]
+                elif hasattr(data["payment_method"], "name"):
+                    data["payment_method"] = data["payment_method"].name
+
+                if data.get("id") is None:
+                    del data["id"]
+
                 data["user_id"] = user_id
                 data["merchant_id"] = merchant.id
                 data["category_id"] = final_category_id
 
                 if "has_merchant" in data:
                     del data["has_merchant"]
+
+                # Apply Import Type Logic
+                if import_type == model.ImportType.CREDIT_CARD_INVOICE:
+                    data["payment_method"] = model.PaymentMethod.CreditCard.name
 
                 payments_dicts.append(data)
 
@@ -89,6 +104,15 @@ def bulk_create_payment(
                 )
                 if "has_merchant" in processed_data:
                     del processed_data["has_merchant"]
+
+                # payment_method is already handled in _process_payment_merchant_and_category
+
+                # Apply Import Type Logic
+                if import_type == model.ImportType.CREDIT_CARD_INVOICE:
+                    processed_data["payment_method"] = (
+                        model.PaymentMethod.CreditCard.name
+                    )
+
                 payments_dicts.append(processed_data)
 
         except PaymentCreationError as e:
@@ -161,8 +185,17 @@ def _process_payment_merchant_and_category(
             f"Categoria não definida para o pagamento '{payment_data.title}'. Informe uma categoria ou configure no estabelecimento."
         )
 
+    data = payment_data.model_dump()
+    if data.get("payment_method") is None:
+        del data["payment_method"]
+    elif hasattr(data["payment_method"], "name"):
+        data["payment_method"] = data["payment_method"].name
+
+    if data.get("id") is None:
+        del data["id"]
+
     return {
-        **payment_data.model_dump(),
+        **data,
         "user_id": current_user.get_uuid(),
         "merchant_id": merchant.id,
         "category_id": final_category_id,
@@ -325,11 +358,20 @@ def delete_payment(current_user: TokenData, db: Session, payment_id: UUID) -> No
 
 
 async def import_payments_from_csv(
-    current_user: TokenData, db: Session, file: UploadFile, source: model.ImportSource
+    current_user: TokenData,
+    db: Session,
+    file: UploadFile,
+    source: model.ImportSource,
+    import_type: model.ImportType,
 ) -> List[model.PaymentImportResponse]:
     try:
         parser = get_parser(source)
-        transactions = await parser.parse(file)
+        if import_type == model.ImportType.CREDIT_CARD_INVOICE:
+            transactions = await parser.parse_invoice(file)
+        elif import_type == model.ImportType.BANK_STATEMENT:
+            transactions = await parser.parse_statement(file)
+        else:
+            raise ValueError(f"Tipo de importação desconhecido: {import_type}")
 
         # 1. Fetch existing payments for deduplication context
         # Optimization: Fetch only payments within the date range of the import
@@ -357,8 +399,44 @@ async def import_payments_from_csv(
             # Signature: (date, amount, title)
             # Note: We rely on string exact match for title.
             existing_signatures = {(p.date, p.amount, p.title) for p in existing_query}
+            existing_ids = {p.id for p in existing_query}
         else:
             existing_signatures = set()
+            existing_ids = set()
+
+        # Pre-fetch system category for Bill Payment
+        bill_payment_category = (
+            db.query(Category).filter(Category.slug == "pagamento-de-fatura").first()
+        )
+
+        if not bill_payment_category:
+            bill_payment_category = Category(
+                name="Pagamento de Fatura",
+                slug="pagamento-de-fatura",
+                color_hex="#64748b",  # Neutral slate color
+                type=CategoryType.NEUTRAL,
+            )
+            db.add(bill_payment_category)
+            db.commit()
+            db.refresh(bill_payment_category)
+
+        # Pre-fetch system category for Investment Redemption
+        investment_redemption_category = (
+            db.query(Category)
+            .filter(Category.slug == "resgate-de-investimento")
+            .first()
+        )
+
+        if not investment_redemption_category:
+            investment_redemption_category = Category(
+                name="Resgate de Investimento",
+                slug="resgate-de-investimento",
+                color_hex="#10b981",  # Emerald/Success color
+                type=CategoryType.NEUTRAL,
+            )
+            db.add(investment_redemption_category)
+            db.commit()
+            db.refresh(investment_redemption_category)
 
     except Exception as e:
 
@@ -369,58 +447,89 @@ async def import_payments_from_csv(
 
     for transaction in transactions:
         is_negative = transaction.amount < 0
-
-        if is_negative:
-            if transaction.title == "Pagamento recebido":
-                continue
-            # Store absolute value temporarily, we might accept it
-            transaction.amount = abs(transaction.amount)
-
-        # Busca Merchant e Category explicitamente fazendo um LEFT JOIN
-        # Retorna uma tupla: (Merchant, Category)
-        # Isso evita alterar o model Merchant e evita n+1 queries
-
-        result = (
-            db.query(Merchant, Category)
-            .outerjoin(Category, Merchant.category_id == Category.id)
-            .filter(Merchant.name == transaction.title)
-            .filter(Merchant.user_id == current_user.get_uuid())
-            .first()
-        )
-
+        result = None
         category_response = None
+
+        # Enforce Bill Payment Category Rule
+        if (
+            transaction.payment_method
+            and transaction.payment_method.value == "bill_payment"
+        ):
+            if bill_payment_category:
+                from ..categories.model import CategoryResponse as CategorySchema
+
+                category_response = CategorySchema.model_validate(bill_payment_category)
+
+            transaction.has_merchant = True  # System category, no merchant logic needed
+
+        elif (
+            transaction.payment_method
+            and transaction.payment_method.value == "investment_redemption"
+        ):
+            if investment_redemption_category:
+                from ..categories.model import CategoryResponse as CategorySchema
+
+                category_response = CategorySchema.model_validate(
+                    investment_redemption_category
+                )
+
+            transaction.has_merchant = True  # System category
+
+        else:
+            result = (
+                db.query(Merchant, Category)
+                .outerjoin(Category, Merchant.category_id == Category.id)
+                .filter(Merchant.name == transaction.title)
+                .filter(Merchant.user_id == current_user.get_uuid())
+                .first()
+            )
 
         if result:
             merchant, category = result
 
             # Smart Validation for Negative Payments
-            if is_negative:
-                if category and category.type == CategoryType.INCOME:
-                    # It's negative and mapped to Income -> Valid refund/income. Keep it.
+            # Ensure the category type matches the transaction flow
+            if category:
+                if category.type == CategoryType.NEUTRAL:
                     pass
-                else:
-                    # It's negative but mapped to Expense (or no category).
-                    # We can't auto-assign an Expense category to a negative value (now positive).
-                    # We treat it as a new/unclassified transaction.
+                elif is_negative and category.type == CategoryType.INCOME:
+                    # Transaction is Expense (negative), but Category is Income. Mismatch.
+                    category = None
+                    transaction.has_merchant = False
+                elif not is_negative and category.type == CategoryType.EXPENSE:
+                    # Transaction is Income (positive), but Category is Expense. Mismatch.
                     category = None
                     transaction.has_merchant = False
 
             if category:
                 from ..categories.model import CategorySimpleResponse as CategorySchema
 
-                category_response = CategorySchema.model_validate(category)
-        else:
+                # Use simple response for merchant-inferred categories
+                # Note: We prioritize bill payment category if set (though mutually exclusive branches prevent conflict)
+                if not category_response:
+                    category_response = CategorySchema.model_validate(category)
+
+        if not result and not (
+            transaction.payment_method
+            and transaction.payment_method.value
+            in ["bill_payment", "investment_redemption"]
+        ):
             transaction.has_merchant = False
 
         transaction.category = category_response
 
         # Check for duplicates
-        if (
-            transaction.date,
-            transaction.amount,
-            transaction.title,
-        ) in existing_signatures:
-            transaction.already_exists = True
+        # Check for duplicates
+        if import_type == model.ImportType.BANK_STATEMENT:
+            if transaction.id and transaction.id in existing_ids:
+                transaction.already_exists = True
+        elif import_type == model.ImportType.CREDIT_CARD_INVOICE:
+            if (
+                transaction.date,
+                abs(transaction.amount),
+                transaction.title,
+            ) in existing_signatures:
+                transaction.already_exists = True
 
         enriched_transactions.append(transaction)
 
