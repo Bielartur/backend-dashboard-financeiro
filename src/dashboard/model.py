@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Literal
 from src.schemas.base import CamelModel
 from src.entities.category import CategoryType
 
@@ -12,8 +12,9 @@ class DashboardSummary(CamelModel):
 
 
 class DashboardAvailableMonth(CamelModel):
-    year: int
-    month: int
+    year: Optional[int] = None
+    month: Optional[int] = None
+    value: Optional[str] = None
     label: str
 
 
@@ -25,7 +26,7 @@ class CategoryMetric(CamelModel):
     total: Decimal
     average: Decimal
     # Status: 'above_average', 'below_average', 'average'
-    status: str
+    status: Literal['above_average', 'below_average', 'average']
 
 
 class MonthlyData(CamelModel):

@@ -322,7 +322,7 @@ def get_available_months(db: Session, user_id: Any) -> List[DashboardAvailableMo
     for row in results:
         year = int(row.year)
         available_options.append(
-            DashboardAvailableMonth(label=str(year), value=str(year))
+            DashboardAvailableMonth(label=str(year), value=str(year), year=year)
         )
 
     return available_options
