@@ -41,9 +41,7 @@ class PaymentMethod(enum.Enum):
 
 class Payment(Base):
     __tablename__ = "payments"
-    __table_args__ = (
-        CheckConstraint("amount >= 0", name="check_payment_amount_positive"),
-    )
+    __tablename__ = "payments"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
@@ -51,7 +49,7 @@ class Payment(Base):
     )
 
     # Normalização
-    merchant_id = Column(UUID(as_uuid=True), ForeignKey("merchants.id"), nullable=True)
+    merchant_id = Column(UUID(as_uuid=True), ForeignKey("merchants.id"), nullable=False)
 
     bank_id = Column(
         UUID(as_uuid=True), ForeignKey("banks.id"), nullable=False, index=True
@@ -60,8 +58,13 @@ class Payment(Base):
     title = Column(String, nullable=False, index=True)
     description = Column(String, nullable=True)
     amount = Column(DECIMAL, nullable=False)
+    open_finance_id = Column(
+        String, nullable=True, unique=True, index=True
+    )  # ID da transação na Pluggy
     payment_method = Column(
-        Enum(PaymentMethod), nullable=False, default=PaymentMethod.Pix
+        Enum(PaymentMethod, values_callable=lambda obj: [e.value for e in obj]),
+        nullable=False,
+        default=PaymentMethod.Pix,
     )
     category_id = Column(
         UUID(as_uuid=True),

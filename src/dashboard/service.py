@@ -53,13 +53,19 @@ def get_dashboard_data(
     """
     Main orchestration function for dashboard data.
     """
-    start_date, end_date = _get_date_range(year_mode)
+    # Pass db and user_id to determine dynamic range based on data
+    start_date, end_date = _get_date_range(db, user_id, year_mode)
 
     # 1. Global Summary (Aggregated in DB)
     summary = _get_global_summary(db, user_id, start_date, end_date)
 
     # 2. Rolling Averages for Categories (for comparison metrics)
-    # Always calculates based on the last 12 months relative to today, to be fair.
+    # Always calculates based on the last 12 months relative to today (or relative to data?)
+    # To be consistent, rolling averages should probably align with the view or be strictly recent history.
+    # Let's keep rolling averages anchored to "Recent" (Today) for now to represent "current habits",
+    # OR match the view window. Matching valid window is safer for historical context.
+    # Let's keep it simple and use the same window or standard 12 months.
+    # The original code used standard 12 months from today. Let's stick to that for "current norms" unless requested.
     rolling_averages = _get_category_rolling_averages(db, user_id)
 
     # 3. Monthly Breakdown with Category Data (Aggregated in DB)
@@ -70,15 +76,30 @@ def get_dashboard_data(
     return DashboardResponse(summary=summary, months=months_data)
 
 
-def _get_date_range(year_mode: str) -> Tuple[date, date]:
+def _get_date_range(db: Session, user_id: Any, year_mode: str) -> Tuple[date, date]:
     today = date.today()
     if year_mode == "last-12":
-        # First day of the month, 11 months ago
-        start_date = today.replace(day=1) - relativedelta(months=11)
-        # Last day of current month (or just go far into future, sticking to today is safer for 'history')
-        # Actually Dashboard usually shows current month in progress.
-        # Let's verify end of current month
-        end_date = (today.replace(day=1) + relativedelta(months=1)) - timedelta(days=1)
+        # Strategy: "Last 12 months WITH DATA"
+        # Find the date of the most recent payment
+        latest_payment_date = (
+            db.query(func.max(Payment.date)).filter(Payment.user_id == user_id).scalar()
+        )
+
+        # If we have data, anchor to that. If not, anchor to today.
+        anchor_date = latest_payment_date if latest_payment_date else today
+
+        # End date: Last day of the anchor month
+        # Start date: First day of the month, 11 months before anchor
+
+        # Example: Anchor = Jan 15 2025.
+        # End Window = Jan 31 2025 (or Feb 1 - 1 day)
+        # Start Window = Feb 1 2024
+
+        end_date = (anchor_date.replace(day=1) + relativedelta(months=1)) - timedelta(
+            days=1
+        )
+        start_date = end_date.replace(day=1) - relativedelta(months=11)
+
     else:
         try:
             year = int(year_mode)
@@ -125,7 +146,8 @@ def _get_global_summary(
     return DashboardSummary(
         total_revenue=total_revenue.quantize(Decimal("0.01")),
         total_expenses=total_expenses.quantize(Decimal("0.01")),
-        balance=(total_revenue - total_expenses).quantize(Decimal("0.01")),
+        # Expenses are negative, so we ADD them to revenue to get net balance
+        balance=(total_revenue + total_expenses).quantize(Decimal("0.01")),
     )
 
 
@@ -267,11 +289,19 @@ def _get_monthly_breakdown(
         # Calculate metrics
         average = averages_map.get(row.category_slug, Decimal(0))
 
+        # Use simple magnitude comparison for status
+        # This works for both Income (positive) and Expense (negative)
+        # "above_average" means "higher magnitude" (more spent OR more earned)
+        # "below_average" means "lower magnitude" (less spent OR less earned)
+
+        abs_amount = abs(amount)
+        abs_average = abs(average)
+
         status = "average"
         # Use Decimal for multiplication to avoid TypeError
-        if amount > average * Decimal("1.2"):
+        if abs_amount > abs_average * Decimal("1.2"):
             status = "above_average"
-        elif amount < average * Decimal("0.8"):
+        elif abs_amount < abs_average * Decimal("0.8"):
             status = "below_average"
 
         # Add Category Metric
@@ -293,7 +323,8 @@ def _get_monthly_breakdown(
             monthly_map[key].balance += amount
         elif row.category_type == CategoryType.EXPENSE:
             monthly_map[key].expenses += amount
-            monthly_map[key].balance -= amount
+            # Amount is already negative for expenses, so we ADD it to balance to decrease it.
+            monthly_map[key].balance += amount
 
     # Fill gaps -> NOW REMOVED based on new requirement
     # We just return the sorted map values
