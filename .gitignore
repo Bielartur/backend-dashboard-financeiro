@@ -214,3 +214,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+pluggy_transactions_dump.json
