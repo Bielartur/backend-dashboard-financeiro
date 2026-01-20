@@ -33,9 +33,12 @@ async def get_merchants(
 
 @router.get("/search", response_model=List[model.MerchantResponse])
 async def search_merchants(
-    query: str, db: DbSession, current_user: TokenData = Depends(get_current_user)
+    query: str,
+    db: DbSession,
+    limit: int = 12,
+    current_user: TokenData = Depends(get_current_user),
 ):
-    return service.search_merchants(current_user, db, query)
+    return service.search_merchants(current_user, db, query, limit)
 
 
 @router.get("/{merchant_id}", response_model=model.MerchantResponse)

@@ -22,6 +22,19 @@ class Merchant(Base):
     merchant_alias = relationship("MerchantAlias", back_populates="merchants")
 
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
+
+    # New Split Categories
+    income_category_id = Column(
+        UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True
+    )
+    expense_category_id = Column(
+        UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True
+    )
+
+    # Relationships
+    category = relationship("Category", foreign_keys=[category_id])
+    income_category = relationship("Category", foreign_keys=[income_category_id])
+    expense_category = relationship("Category", foreign_keys=[expense_category_id])
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )

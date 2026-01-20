@@ -50,12 +50,13 @@ def get_merchants(current_user: TokenData, db: Session) -> list[model.MerchantRe
 
 
 def search_merchants(
-    current_user: TokenData, db: Session, query: str
+    current_user: TokenData, db: Session, query: str, limit: int = 12
 ) -> list[model.MerchantResponse]:
     merchants = (
         db.query(Merchant)
         .filter(Merchant.user_id == current_user.get_uuid())
         .filter(Merchant.name.ilike(f"%{query}%"))
+        .limit(limit)
         .all()
     )
     logging.info(
