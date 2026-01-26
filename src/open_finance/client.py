@@ -3,7 +3,14 @@ import uuid
 import pluggy_sdk
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pluggy_sdk.api import auth_api, account_api, transaction_api, items_api
+from pluggy_sdk.api import (
+    auth_api,
+    account_api,
+    transaction_api,
+    items_api,
+    category_api,
+    connector_api,
+)
 from pluggy_sdk.models.auth_request import AuthRequest
 from pluggy_sdk.models.connect_token_request import ConnectTokenRequest
 from dotenv import load_dotenv
@@ -46,7 +53,7 @@ class PluggyClient:
         self._api_key = response.api_key
         self.configuration.api_key["default"] = self._api_key
 
-    async def create_connect_token(self) -> Dict[str, Any]:
+    def create_connect_token(self) -> Dict[str, Any]:
         """Creates a Connect Token for the frontend widget."""
         client = self._get_api_client()
         api = auth_api.AuthApi(client)
@@ -54,7 +61,7 @@ class PluggyClient:
         resp = api.connect_token_create(connect_token_request=ConnectTokenRequest())
         return resp.to_dict()
 
-    async def get_item(self, item_id: str) -> Dict[str, Any]:
+    def get_item(self, item_id: str) -> Dict[str, Any]:
         """Fetches a specific Item by ID. Bypassing SDK validation due to missing enum values."""
         client = self._get_api_client()
         # ItemApi handles item-related operations
@@ -67,9 +74,7 @@ class PluggyClient:
 
         return json.loads(resp.data.decode("utf-8"))
 
-    async def get_accounts(
-        self, item_id: str, type: str = None
-    ) -> List[Dict[str, Any]]:
+    def get_accounts(self, item_id: str, type: str = None) -> List[Dict[str, Any]]:
         """
         Fetches accounts for a given Item ID.
         :param type: Optional account type filter (e.g., 'BANK').
@@ -82,7 +87,7 @@ class PluggyClient:
         resp = api.accounts_list(item_id=uuid.UUID(item_id), type=type)
         return [acc.to_dict() for acc in resp.results]
 
-    async def get_transactions(
+    def get_transactions(
         self, account_id: str, from_date: str = None
     ) -> List[Dict[str, Any]]:
         """Fetches transactions for a given Account ID."""
@@ -106,6 +111,34 @@ class PluggyClient:
         # Dump to file for inspection
         with open("pluggy_transactions_dump.json", "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        return data.get("results", [])
+
+    def get_categories(self) -> List[Dict[str, Any]]:
+        """Fetches all available categories from Pluggy."""
+        client = self._get_api_client()
+        api = category_api.CategoryApi(client)
+
+        # Using without_preload_content to avoid Pydantic validation errors
+        # if the SDK model doesn't match the API resonse perfectly (e.g. 'total' field issues)
+        resp = api.categories_list_without_preload_content()
+
+        import json
+
+        data = json.loads(resp.data.decode("utf-8"))
+        return data.get("results", [])
+
+    def get_connectors(self) -> List[Dict[str, Any]]:
+        """Fetches all available connectors (banks/institutions) from Pluggy."""
+        client = self._get_api_client()
+        # Connectors are usually under /connectors. SDK usually has ConnectorApi.
+        from pluggy_sdk.api import connector_api
+
+        api = connector_api.ConnectorApi(client)
+        resp = api.connectors_list_without_preload_content()
+
+        import json
+
+        data = json.loads(resp.data.decode("utf-8"))
         return data.get("results", [])
 
 
