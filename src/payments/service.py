@@ -3,6 +3,7 @@ from uuid import uuid4, UUID
 from typing import Optional, List
 from decimal import Decimal
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert
 from fastapi import HTTPException, UploadFile
 from . import model
 from .parsers import get_parser
@@ -10,7 +11,7 @@ from ..auth.model import TokenData
 from ..entities.payment import Payment, PaymentMethod
 from ..entities.merchant import Merchant
 from ..entities.merchant_alias import MerchantAlias
-from ..entities.category import Category, CategoryType
+from ..entities.category import Category
 from ..entities.bank import Bank
 from ..exceptions.payments import (
     PaymentCreationError,
@@ -18,9 +19,6 @@ from ..exceptions.payments import (
     PaymentImportError,
 )
 import logging
-
-
-from sqlalchemy import insert
 
 
 def bulk_create_payment(
@@ -56,30 +54,62 @@ def bulk_create_payment(
             ):
                 merchant = existing_merchants_map[payment_data.title]
 
-                # Replica lógica de categoria (mas sem query extra)
+                # Determine context: Income or Expense
+                # payment_data.amount might differ from final amount if parsing happens,
+                # but here payment_data is model.PaymentCreate which has 'amount'.
+                # Amount is typically stored signed.
+                is_expense = payment_data.amount < 0
+
+                # Logic:
+                # 1. Use explicit category if provided.
+                # 2. Else use contextual category from merchant.
+                # 3. Else fallback to legacy merchant.category_id (if type matches?)
+
                 final_category_id = payment_data.category_id
-                if not final_category_id and merchant.category_id:
-                    final_category_id = merchant.category_id
 
                 if not final_category_id:
-                    # Se mesmo assim não tiver categoria, fallback para a função completa que lança o erro correto ou tenta algo mais
-                    # Mas aqui podemos assumir que se o usuário mandou sem categoria, e o merchant não tem, deveria dar erro.
-                    # Vamos chamar 'processed_data' normalmente para garantir a consistência do erro?
-                    # Ou lançar erro direto.
-                    # Para garantir consistência 100%, se faltar categoria, usamos a função completa.
-                    processed_data = _process_payment_merchant_and_category(
-                        current_user, db, payment_data
+                    if is_expense:
+                        final_category_id = (
+                            merchant.expense_category_id or merchant.category_id
+                        )
+                    else:
+                        final_category_id = (
+                            merchant.income_category_id or merchant.category_id
+                        )
+
+                # Learn/Update Merchant
+                # Only update if we have a valid final_category_id
+                if final_category_id:
+                    # We might want to know the type of this category to update the CORRECT column.
+                    # Optimization issue: We don't have the category TYPE here easily without fetching it.
+                    # BUT if we are in this fast path, 'merchant' is precached but 'category' is not.
+                    # To strictly update 'expense_category_id' vs 'income_category_id', we need the category type.
+                    # Or we just assume based on transaction sign?
+                    # If I pay an expense (amount < 0), the category used MUST be an expense category (usually).
+                    # So it is safe to assign to expense_category_id?
+                    # Unless it's a Neutral category?
+                    # Let's assume sign implies intent.
+
+                    if is_expense:
+                        if merchant.expense_category_id != final_category_id:
+                            merchant.expense_category_id = final_category_id
+                            db.add(merchant)
+                    else:
+                        if merchant.income_category_id != final_category_id:
+                            merchant.income_category_id = final_category_id
+                            db.add(merchant)
+
+                if not final_category_id:
+                    # Soft fail or hard fail? Current logic raises error.
+                    raise PaymentCreationError(
+                        f"Categoria não definida para o pagamento '{payment_data.title}'. Informe uma categoria ou configure no estabelecimento."
                     )
-                    if "has_merchant" in processed_data:
-                        del processed_data["has_merchant"]
-                    payments_dicts.append(processed_data)
-                    continue
 
                 data = payment_data.model_dump()
                 if data.get("payment_method") is None:
                     del data["payment_method"]
-                elif hasattr(data["payment_method"], "name"):
-                    data["payment_method"] = data["payment_method"].name
+                elif hasattr(data["payment_method"], "value"):
+                    data["payment_method"] = data["payment_method"].value
 
                 if data.get("id") is None:
                     del data["id"]
@@ -91,9 +121,8 @@ def bulk_create_payment(
                 if "has_merchant" in data:
                     del data["has_merchant"]
 
-                # Apply Import Type Logic
                 if import_type == model.ImportType.CREDIT_CARD_INVOICE:
-                    data["payment_method"] = model.PaymentMethod.CreditCard.name
+                    data["payment_method"] = model.PaymentMethod.CreditCard.value
 
                 payments_dicts.append(data)
 
@@ -110,8 +139,12 @@ def bulk_create_payment(
                 # Apply Import Type Logic
                 if import_type == model.ImportType.CREDIT_CARD_INVOICE:
                     processed_data["payment_method"] = (
-                        model.PaymentMethod.CreditCard.name
+                        model.PaymentMethod.CreditCard.value
                     )
+
+                # Ensure bank_id is passed if present in payment_data (which comes from enriched transaction)
+                if payment_data.bank_id:
+                    processed_data["bank_id"] = payment_data.bank_id
 
                 payments_dicts.append(processed_data)
 
@@ -127,15 +160,33 @@ def bulk_create_payment(
     try:
         # PostgreSQL permite INSERT ... RETURNING para obter os objetos criados em uma única query
         # Isso é o mais próximo e eficiente comparado ao bulk_create do Django
-        stmt = insert(Payment).values(payments_dicts).returning(Payment)
+        stmt = insert(Payment).values(payments_dicts)
+
+        # Handle duplicates by doing nothing (skipping them)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["id"])
+
+        stmt = stmt.returning(Payment)
+
         result = db.scalars(stmt)
         created_payments = result.all()
         db.commit()
+
+        if len(created_payments) < len(payments_dicts):
+            logging.warning(
+                f"Solicitado criação de {len(payments_dicts)} pagamentos, mas apenas {len(created_payments)} foram inseridos (possivelmente duplicados)."
+            )
+
         return created_payments
 
     except Exception as e:
         db.rollback()
+        import traceback
+
         logging.error(f"Erro ao criar múltiplos pagamentos: {str(e)}")
+        logging.error(
+            f"Payload de exemplo (primeiro item): {payments_dicts[0] if payments_dicts else 'Empty'}"
+        )
+        logging.error(traceback.format_exc())
         raise PaymentCreationError(str(e))
 
 
@@ -173,26 +224,87 @@ def _process_payment_merchant_and_category(
 
     # Processar lógica de categoria
     final_category_id = None
-    if payment_data.category_id:
+    is_expense = payment_data.amount < 0
+
+    # 0. Check for Alias Group Category Override
+    # Re-fetch alias to ensure we have the latest (including relation if needed, though we have merchant.merchant_alias_id)
+    # Optimization: Use the merchant's alias relationship if eager loaded or fetch it.
+    # Since we didn't eager load 'merchant_alias' in the query at line 198, let's fetch it if needed or assume we can rely on ID.
+    alias_override_category_id = None
+    if merchant.merchant_alias_id:
+        alias = (
+            db.query(MerchantAlias)
+            .filter(MerchantAlias.id == merchant.merchant_alias_id)
+            .first()
+        )
+        if alias and alias.category_id:
+            alias_override_category_id = alias.category_id
+            # logging.info(f"Alias overriding category: Using {alias.category_id} instead of Pluggy/Merchant defaults.")
+
+    if alias_override_category_id:
+        final_category_id = alias_override_category_id
+
+    # 1. Use explicit category if provided (and no alias override? Or does alias override explicit too?
+    # Usually explicit user choice (e.g. editing) beats all. But here payment_data comes from Pluggy usually.
+    # If payment_data.category_id comes from Pluggy, alias should override it.
+    # If payment_data.category_id comes from USER Manual Input, it should usually win.
+    # How to distinguish? "payment_data" is generic.
+    # Assumption for Import/Sync: logic here is for "Identification".
+    # If the user specifically set a category in an alias group, they WANT that category for these merchants.
+    # So Alias Override > Pluggy Category.
+
+    elif payment_data.category_id:
         final_category_id = payment_data.category_id
-        if not merchant.category_id:
-            merchant.category_id = payment_data.category_id
-            db.add(merchant)
-    elif merchant.category_id:
-        final_category_id = merchant.category_id
+
+        # Determine which slot to update based on transaction sign
+        # (Assuming the category provided aligns with the sign)
+        if is_expense:
+            if merchant.expense_category_id != final_category_id:
+                merchant.expense_category_id = final_category_id
+                db.add(merchant)
+        else:
+            if merchant.income_category_id != final_category_id:
+                merchant.income_category_id = final_category_id
+                db.add(merchant)
+
     else:
+        # Try to infer from merchant slots
+        if is_expense:
+            final_category_id = merchant.expense_category_id or merchant.category_id
+        else:
+            final_category_id = merchant.income_category_id or merchant.category_id
+
+    if not final_category_id:
         raise PaymentCreationError(
             f"Categoria não definida para o pagamento '{payment_data.title}'. Informe uma categoria ou configure no estabelecimento."
         )
 
+    # Validate Category Type Mismatch
+    # Fetch the category object to check its type
+    category_obj = db.query(Category).filter(Category.id == final_category_id).first()
+    if category_obj:
+        if category_obj.type == CategoryType.NEUTRAL:
+            pass
+        elif is_expense and category_obj.type == CategoryType.INCOME:
+            raise PaymentCreationError(
+                f"Pagamento de despesa não pode ter categoria de receita '{category_obj.name}'."
+            )
+        elif not is_expense and category_obj.type == CategoryType.EXPENSE:
+            raise PaymentCreationError(
+                f"Pagamento de receita não pode ter categoria de despesa '{category_obj.name}'."
+            )
+
     data = payment_data.model_dump()
     if data.get("payment_method") is None:
         del data["payment_method"]
-    elif hasattr(data["payment_method"], "name"):
-        data["payment_method"] = data["payment_method"].name
+    elif hasattr(data["payment_method"], "value"):
+        data["payment_method"] = data["payment_method"].value
 
     if data.get("id") is None:
         del data["id"]
+
+    if "has_merchant" in data:
+        del data["has_merchant"]
 
     return {
         **data,
@@ -379,10 +491,16 @@ async def import_payments_from_csv(
             min_date = min(t.date for t in transactions)
             max_date = max(t.date for t in transactions)
 
-            # Fetch bank details based on source
-            # Assuming source.value corresponds to bank.slug (e.g. "nubank", "itau")
+            # Fetch bank details based on source lookup strategy
+            # If source is explicit enum (NUBANK, ITAU), map to our synced bank slugs/names
             bank_slug = source.value
-            bank_obj = db.query(Bank).filter(Bank.slug == bank_slug).first()
+
+            # Map known enums to expected slugs in DB (or matching logic)
+            # This relies on slugs generated in BankSyncService: name.lower().replace(" ", "-")
+            # NUBANK -> nubank
+            # ITAU -> itau-unibanco
+
+            bank_obj = db.query(Bank).filter(Bank.slug.ilike(f"%{bank_slug}%")).first()
 
             query = db.query(Payment).filter(
                 Payment.user_id == current_user.get_uuid(),
@@ -392,6 +510,13 @@ async def import_payments_from_csv(
 
             if bank_obj:
                 query = query.filter(Payment.bank_id == bank_obj.id)
+            else:
+                logging.warning(
+                    f"Banco desconhecido ou não suportado encontrado na importação: {bank_slug}"
+                )
+                raise PaymentImportError(
+                    f"O banco '{bank_slug}' ainda não é suportado pelo sistema. Em breve ele estará disponível!"
+                )
 
             existing_query = query.all()
 
@@ -487,27 +612,58 @@ async def import_payments_from_csv(
         if result:
             merchant, category = result
 
-            # Smart Validation for Negative Payments
-            # Ensure the category type matches the transaction flow
-            if category:
-                if category.type == CategoryType.NEUTRAL:
+            # Since we did a simple outerjoin on 'category_id', 'category' variable holds the LEGACY default category.
+            # We need to explicitly check the new columns.
+            # Since we didn't eager load them in the query above (lines 489-495), we might rely on lazy loading
+            # OR we should update the query to fetch them?
+            # The query at 490 only joins on `category_id`.
+            # Let's trust logic: access via relationship or IDs.
+
+            suggested_category = None
+
+            if is_negative:
+                # Expense
+                if merchant.expense_category:
+                    suggested_category = merchant.expense_category
+                elif (
+                    merchant.category and merchant.category.type == CategoryType.EXPENSE
+                ):
+                    # Fallback to legacy if it matches type
+                    suggested_category = merchant.category
+            else:
+                # Income
+                if merchant.income_category:
+                    suggested_category = merchant.income_category
+                elif (
+                    merchant.category and merchant.category.type == CategoryType.INCOME
+                ):
+                    # Fallback to legacy if it matches type
+                    suggested_category = merchant.category
+
+            # Smart Validation / Override
+            # If we found a suggested category, let's use it.
+            # (The previous logic validated 'category', which was the legacy one).
+
+            if suggested_category:
+                if suggested_category.type == CategoryType.NEUTRAL:
                     pass
-                elif is_negative and category.type == CategoryType.INCOME:
-                    # Transaction is Expense (negative), but Category is Income. Mismatch.
-                    category = None
+                elif is_negative and suggested_category.type == CategoryType.INCOME:
+                    suggested_category = None
                     transaction.has_merchant = False
-                elif not is_negative and category.type == CategoryType.EXPENSE:
-                    # Transaction is Income (positive), but Category is Expense. Mismatch.
-                    category = None
+                elif (
+                    not is_negative and suggested_category.type == CategoryType.EXPENSE
+                ):
+                    suggested_category = None
                     transaction.has_merchant = False
 
-            if category:
+            if suggested_category:
                 from ..categories.model import CategorySimpleResponse as CategorySchema
 
                 # Use simple response for merchant-inferred categories
-                # Note: We prioritize bill payment category if set (though mutually exclusive branches prevent conflict)
                 if not category_response:
-                    category_response = CategorySchema.model_validate(category)
+                    category_response = CategorySchema.model_validate(
+                        suggested_category
+                    )
 
         if not result and not (
             transaction.payment_method
@@ -515,6 +671,9 @@ async def import_payments_from_csv(
             in ["bill_payment", "investment_redemption"]
         ):
             transaction.has_merchant = False
+
+        if bank_obj:
+            transaction.bank_id = bank_obj.id
 
         transaction.category = category_response
 
@@ -524,14 +683,65 @@ async def import_payments_from_csv(
             if transaction.id and transaction.id in existing_ids:
                 transaction.already_exists = True
         elif import_type == model.ImportType.CREDIT_CARD_INVOICE:
-            if (
-                transaction.date,
-                abs(transaction.amount),
-                transaction.title,
-            ) in existing_signatures:
+            sig = (transaction.date, transaction.amount, transaction.title)
+            if sig in existing_signatures:
                 transaction.already_exists = True
+            else:
+                # Debug logging to understand why it failed
+                logging.info(f"Checking Duplicate: {sig}")
+                if existing_signatures:
+                    # Log first few to verify format
+                    logging.info(
+                        f"Existing Signatures Sample: {list(existing_signatures)[:3]}"
+                    )
+                    # Check close matches
+                    for ex in existing_signatures:
+                        if ex[2] == sig[2]:  # Matching title
+                            logging.info(
+                                f"Found title match but signature differed: {ex} vs {sig}"
+                            )
 
         enriched_transactions.append(transaction)
 
-    enriched_transactions.sort(key=lambda x: x.has_merchant)
+    # Sort strategy:
+    # 1. First, items WITHOUT a category (category is None) -> (0)
+    # 2. Then, items WITH a category -> (1)
+    # Secondary sort: Date (descending)
+
+    enriched_transactions.sort(
+        key=lambda x: (
+            1 if x.category else 0,  # 0 comes first (No Category)
+            # x.date # Secondary sort if needed
+        )
+    )
     return enriched_transactions
+
+
+def update_payments_category_bulk(
+    db: Session,
+    user_id: UUID,
+    merchant_ids: List[UUID],
+    category_id: UUID | None,
+) -> int:
+    """
+    Atualiza em massa a categoria de todos os pagamentos vinculados aos merchants fornecidos.
+    Executa um único comando UPDATE no banco de dados para alta performance.
+    """
+    if not merchant_ids:
+        return 0
+
+    stmt = (
+        model.Payment.__table__.update()
+        .where(model.Payment.user_id == user_id)
+        .where(model.Payment.merchant_id.in_(merchant_ids))
+        .values(category_id=category_id)
+    )
+
+    result = db.execute(stmt)
+    updated_count = result.rowcount
+    db.commit()
+
+    logging.info(
+        f"Bulk update: {updated_count} pagamentos atualizados para categoria {category_id} (Merchants: {len(merchant_ids)})"
+    )
+    return updated_count

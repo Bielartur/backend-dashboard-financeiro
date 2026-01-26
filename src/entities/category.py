@@ -6,32 +6,15 @@ from datetime import datetime, timezone
 from ..database.core import Base
 
 
-class CategoryType(enum.Enum):
-    INCOME = "income"
-    EXPENSE = "expense"
-    NEUTRAL = "neutral"
-
-    @property
-    def display_name(self):
-        return (
-            "Receita"
-            if self == CategoryType.INCOME
-            else "Despesa" if self == CategoryType.EXPENSE else "Neutra"
-        )
-
-
 class Category(Base):
     __tablename__ = "categories"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String, nullable=False, unique=True)
-    slug = Column(String, nullable=False, unique=True)
+    pluggy_id = Column(String, nullable=True, unique=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
+    name = Column(String, nullable=False, unique=False)
+    slug = Column(String, nullable=False, unique=False)
     color_hex = Column(String, nullable=False)
-    type = Column(
-        Enum(CategoryType, values_callable=lambda x: [e.value for e in x]),
-        nullable=False,
-        default=CategoryType.EXPENSE,
-    )
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
@@ -43,7 +26,7 @@ class Category(Base):
     )
 
     def __repr__(self):
-        return f"<Category(name='{self.name}', type='{self.type}', color_hex='{self.color_hex}')>"
+        return f"<Category(name='{self.name}', color_hex='{self.color_hex}')>"
 
 
 class UserCategorySetting(Base):
@@ -54,6 +37,7 @@ class UserCategorySetting(Base):
     category_id = Column(
         UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False
     )
+    alias = Column(String, nullable=True)
     color_hex = Column(String, nullable=False)
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)

@@ -1,0 +1,1381 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.2, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\gabri\OneDrive\Documentos\Vibe Coding\backend-financas\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\gabri\OneDrive\Documentos\Vibe Coding\backend-financas
+configfile: pyproject.toml
+plugins: anyio-4.12.0, asyncio-1.3.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 13 items
+
+tests/payments/test_controller.py::test_create_payment_api PASSED        [  7%]
+tests/payments/test_controller.py::test_search_payments_api PASSED       [ 15%]
+tests/payments/test_controller.py::test_get_payment_by_id_api PASSED     [ 23%]
+tests/payments/test_controller.py::test_update_payment_api PASSED        [ 30%]
+tests/payments/test_controller.py::test_delete_payment_api PASSED        [ 38%]
+tests/payments/test_parsers.py::test_parse_invoice_valid_csv FAILED      [ 46%]
+tests/payments/test_parsers.py::test_parse_statement_valid_csv FAILED    [ 53%]
+tests/payments/test_service.py::test_create_payment FAILED               [ 61%]
+tests/payments/test_service.py::test_get_payment_by_id FAILED            [ 69%]
+tests/payments/test_service.py::test_get_payment_not_found PASSED        [ 76%]
+tests/payments/test_service.py::test_pdate_payment FAILED                [ 84%]
+tests/payments/test_service.py::test_delete_payment FAILED               [ 92%]
+tests/payments/test_service.py::test_search_payments FAILED              [100%]
+
+================================== FAILURES ===================================
+________________________ test_parse_invoice_valid_csv _________________________
+
+nubank_parser = <src.payments.parsers.nubank.NubankParser object at 0x0000016E58F07230>
+
+    @pytest.mark.asyncio
+    async def test_parse_invoice_valid_csv(nubank_parser):
+        # Mock content: date,category,title,amount
+        csv_content = """date,category,title,amount
+    2023-10-01,food,Lunch,25.50
+    2023-10-02,transport,Uber,15.00
+    2023-10-03,payment,Pagamento recebido,-100.00
+    """
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.read = AsyncMock(return_value=csv_content.encode("utf-8"))
+    
+        results = await nubank_parser.parse_invoice(mock_file)
+    
+        assert len(results) == 3
+    
+        # Check Expense (Positive in CSV -> Negative Amount)
+        assert results[0].date == date(2023, 10, 1)
+        assert results[0].title == "Lunch"
+        assert results[0].amount == Decimal("-25.50")
+        assert results[0].payment_method.value == PaymentMethod.CreditCard.value
+    
+        # Check Payment (Negative in CSV -> Positive Amount) "Pagamento recebido"
+        assert results[2].date == date(2023, 10, 3)
+        assert results[2].title == "Pagamento recebido"
+        assert results[2].amount == Decimal("100.00")
+>       assert results[2].payment_method == PaymentMethod.BillPayment
+E       AssertionError: assert PaymentMethodSchema(value='bill_payment', display_name='Pagamento de Fatura') == <PaymentMethod.BillPayment: 'bill_payment'>
+E        +  where PaymentMethodSchema(value='bill_payment', display_name='Pagamento de Fatura') = PaymentImportResponse(id=None, date=datetime.date(2023, 10, 3), title='Pagamento recebido', amount=Decimal('100.00'), category=None, has_merchant=True, already_exists=False, payment_method=PaymentMethodSchema(value='bill_payment', display_name='Pagamento de Fatura')).payment_method
+E        +  and   <PaymentMethod.BillPayment: 'bill_payment'> = PaymentMethod.BillPayment
+
+tests\payments\test_parsers.py:40: AssertionError
+_______________________ test_parse_statement_valid_csv ________________________
+
+nubank_parser = <src.payments.parsers.nubank.NubankParser object at 0x0000016E590ADA90>
+
+    @pytest.mark.asyncio
+    async def test_parse_statement_valid_csv(nubank_parser):
+        # Mock content: Data,Valor,Identificador,DescriþÒo
+        csv_content = """Data,Valor,Identificador,DescriþÒo
+    01/10/2023,-50.00,uuid-1234,TransferÛncia enviada pelo Pix - JoÒo Silva
+    02/10/2023,-20.00,uuid-5678,Compra no dÚbito - Padaria
+    03/10/2023,-100.00,uuid-9012,Pagamento de fatura
+    04/10/2023,1000.00,uuid-3456,TransferÛncia recebida pelo Pix - Salary
+    """
+        mock_file = MagicMock(spec=UploadFile)
+        mock_file.read = AsyncMock(return_value=csv_content.encode("utf-8"))
+    
+        results = await nubank_parser.parse_statement(mock_file)
+    
+        assert len(results) == 4
+    
+        # Pix Sent
+        assert results[0].payment_method.value == PaymentMethod.Pix.value
+        assert results[0].amount == Decimal("-50.00")
+        assert "JoÒo Silva" in results[0].title
+    
+        # Debit Purchase
+>       assert results[1].payment_method == PaymentMethod.DebitCard
+E       AssertionError: assert PaymentMethodSchema(value='debit_card', display_name='Cart\xe3o de D\xe9bito') == <PaymentMethod.DebitCard: 'debit_card'>
+E        +  where PaymentMethodSchema(value='debit_card', display_name='Cart\xe3o de D\xe9bito') = PaymentImportResponse(id=None, date=datetime.date(2023, 10, 2), title='Padaria', amount=Decimal('-20.00'), category=None, has_merchant=True, already_exists=False, payment_method=PaymentMethodSchema(value='debit_card', display_name='Cart\xe3o de D\xe9bito')).payment_method
+E        +  and   <PaymentMethod.DebitCard: 'debit_card'> = PaymentMethod.DebitCard
+
+tests\payments\test_parsers.py:65: AssertionError
+_____________________________ test_create_payment _____________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000016E58EE65D0>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE6690>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x0000016E5906EF90>
+parameters = [('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', ...)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E590DDC40>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE6690>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.IntegrityError: NOT NULL constraint failed: payments.bank_id
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+
+The above exception was the direct cause of the following exception:
+
+current_user = TokenData(user_id='87133bd7-4266-4814-b8c2-d43375114e8f')
+db = <sqlalchemy.orm.session.Session object at 0x0000016E58F15D90>
+payment = PaymentCreate(title='Test Payment', date=datetime.date(2023, 10, 1), amount=Decimal('-50.00'), payment_method=<Payment...rd: 'credit_card'>, bank_id=None, id=None, category_id=UUID('1916129e-68cc-4366-9c7f-e95c10c9e9b6'), has_merchant=True)
+
+    def create_payment(
+        current_user: TokenData, db: Session, payment: model.PaymentCreate
+    ) -> Payment:
+        try:
+            processed_data = _process_payment_merchant_and_category(
+                current_user, db, payment
+            )
+            new_payment = Payment(**processed_data)
+    
+            db.add(new_payment)
+>           db.commit()
+
+src\payments\service.py:281: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:2030: in commit
+    trans.commit(_to_root=True)
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1311: in commit
+    self._prepare_impl()
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1286: in _prepare_impl
+    self.session.flush()
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4331: in flush
+    self._flush(objects)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4466: in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\util\langhelpers.py:224: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4427: in _flush
+    flush_context.execute()
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:466: in execute
+    rec.execute(self)
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:642: in execute
+    util.preloaded.orm_persistence.save_obj(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:93: in save_obj
+    _emit_insert_statements(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:1233: in _emit_insert_statements
+    result = connection.execute(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1419: in execute
+    return meth(
+.venv\Lib\site-packages\sqlalchemy\sql\elements.py:527: in _execute_on_connection
+    return connection._execute_clauseelement(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1641: in _execute_clauseelement
+    ret = self._execute_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2363: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E590DDC40>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE6690>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+E       [SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+E       [parameters: ('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', None, -50.0, 'credit_card', '1916129e68cc43669c7fe95c10c9e9b6', '2026-01-16 19:01:03.312703', '2026-01-16 19:01:03.312705')]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+
+During handling of the above exception, another exception occurred:
+
+db_session = <sqlalchemy.orm.session.Session object at 0x0000016E58F15D90>
+token_data = TokenData(user_id='87133bd7-4266-4814-b8c2-d43375114e8f')
+test_user = <User(username='test@example.com', first_name='Test', last_name='User')>
+sample_category = <Category(name='Test Category', type='CategoryType.EXPENSE', color_hex='#000000')>
+
+    def test_create_payment(db_session, token_data, test_user, sample_category):
+        # Setup: Ensure no merchant exists initially to test auto-creation
+        # But wait, create_payment logic handles it.
+    
+        payment_data = PaymentCreate(
+            title="Test Payment",
+            date=date(2023, 10, 1),
+            amount=Decimal("-50.00"),
+            payment_method=PaymentMethod.CreditCard,
+            bank_id=uuid4(),  # Mock bank_id, assuming DB allows random UUID if not strictly enforced in in-memory SQLite without PRAGMA foreign_keys=ON?
+            # Actually, standard SQLite doesn't enforce FKs by default unless enabled. Check Conftest.
+            # But if it fails, we might need a Bank fixture.
+            category_id=sample_category.id,
+        )
+        payment_data.bank_id = None  # Avoid FK issues for now if strictly enforced
+    
+>       payment = service.create_payment(token_data, db_session, payment_data)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\payments\test_service.py:62: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+current_user = TokenData(user_id='87133bd7-4266-4814-b8c2-d43375114e8f')
+db = <sqlalchemy.orm.session.Session object at 0x0000016E58F15D90>
+payment = PaymentCreate(title='Test Payment', date=datetime.date(2023, 10, 1), amount=Decimal('-50.00'), payment_method=<Payment...rd: 'credit_card'>, bank_id=None, id=None, category_id=UUID('1916129e-68cc-4366-9c7f-e95c10c9e9b6'), has_merchant=True)
+
+    def create_payment(
+        current_user: TokenData, db: Session, payment: model.PaymentCreate
+    ) -> Payment:
+        try:
+            processed_data = _process_payment_merchant_and_category(
+                current_user, db, payment
+            )
+            new_payment = Payment(**processed_data)
+    
+            db.add(new_payment)
+            db.commit()
+            db.refresh(new_payment)
+            logging.info(
+                f"Novo pagamento registrado para o usußrio de ID: {current_user.get_uuid()}"
+            )
+            return new_payment
+        except PaymentCreationError:
+            db.rollback()
+            raise
+        except Exception as e:
+            db.rollback()
+            logging.error(
+                f"Falha na criaþÒo de pagamento para o usußrio de ID: {current_user.get_uuid()}: {str(e)}"
+            )
+>           raise PaymentCreationError(str(e))
+E           src.exceptions.payments.PaymentCreationError: 500: Falha na criaþÒo do pagamento: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+E           [SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+E           [parameters: ('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', None, -50.0, 'credit_card', '1916129e68cc43669c7fe95c10c9e9b6', '2026-01-16 19:01:03.312703', '2026-01-16 19:01:03.312705')]
+E           (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+src\payments\service.py:295: PaymentCreationError
+---------------------------- Captured stderr call -----------------------------
+INFO:root:Novo merchant e alias criados automaticamente: Test Payment
+ERROR:root:Falha na criaþÒo de pagamento para o usußrio de ID: 87133bd7-4266-4814-b8c2-d43375114e8f: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+[SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', None, -50.0, 'credit_card', '1916129e68cc43669c7fe95c10c9e9b6', '2026-01-16 19:01:03.312703', '2026-01-16 19:01:03.312705')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+------------------------------ Captured log call ------------------------------
+INFO     root:service.py:217 Novo merchant e alias criados automaticamente: Test Payment
+ERROR    root:service.py:292 Falha na criaþÒo de pagamento para o usußrio de ID: 87133bd7-4266-4814-b8c2-d43375114e8f: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+[SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', None, -50.0, 'credit_card', '1916129e68cc43669c7fe95c10c9e9b6', '2026-01-16 19:01:03.312703', '2026-01-16 19:01:03.312705')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+___________________________ test_get_payment_by_id ____________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000016E590BFD10>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E590BFAD0>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x0000016E5AAD4A70>
+parameters = [('190c3d354f9d47089c711e9ddb71e916', 'b204f4f6bbd444319e85478febcedcb9', 'bbc03533d925435c9482deb909a5abb8', None, '2023-10-01', 'Manual Payment', ...)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E591932C0>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('190c3d354f9d47089c711e9ddb71e916', 'b204f4f6bbd444319e85478febcedcb9', 'bbc03533d925435c9482deb909a5abb8', None, '2023-10-01', 'Manual Payment', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E590BFAD0>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.IntegrityError: NOT NULL constraint failed: payments.bank_id
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+
+The above exception was the direct cause of the following exception:
+
+db_session = <sqlalchemy.orm.session.Session object at 0x0000016E58FD6CF0>
+token_data = TokenData(user_id='b204f4f6-bbd4-4431-9e85-478febcedcb9')
+test_user = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...4184')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] User object at 0x16e58fd78a0>
+sample_category = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Category object at 0x16e58fd6be0>
+sample_merchant = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Merchant object at 0x16e586b3e30>
+
+    def test_get_payment_by_id(
+        db_session, token_data, test_user, sample_category, sample_merchant
+    ):
+        # Create manually
+        payment = Payment(
+            user_id=test_user.id,
+            category_id=sample_category.id,
+            merchant_id=sample_merchant.id,
+            title="Manual Payment",
+            date=date(2023, 10, 1),
+            amount=Decimal("-10.00"),
+            bank_id=None,
+        )
+        db_session.add(payment)
+>       db_session.commit()
+
+tests\payments\test_service.py:86: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:2030: in commit
+    trans.commit(_to_root=True)
+<string>:2: in commit
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1311: in commit
+    self._prepare_impl()
+<string>:2: in _prepare_impl
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1286: in _prepare_impl
+    self.session.flush()
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4331: in flush
+    self._flush(objects)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4466: in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\util\langhelpers.py:224: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4427: in _flush
+    flush_context.execute()
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:466: in execute
+    rec.execute(self)
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:642: in execute
+    util.preloaded.orm_persistence.save_obj(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:93: in save_obj
+    _emit_insert_statements(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:1233: in _emit_insert_statements
+    result = connection.execute(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1419: in execute
+    return meth(
+.venv\Lib\site-packages\sqlalchemy\sql\elements.py:527: in _execute_on_connection
+    return connection._execute_clauseelement(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1641: in _execute_clauseelement
+    ret = self._execute_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2363: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E591932C0>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('190c3d354f9d47089c711e9ddb71e916', 'b204f4f6bbd444319e85478febcedcb9', 'bbc03533d925435c9482deb909a5abb8', None, '2023-10-01', 'Manual Payment', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E590BFAD0>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+E       [SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+E       [parameters: ('190c3d354f9d47089c711e9ddb71e916', 'b204f4f6bbd444319e85478febcedcb9', 'bbc03533d925435c9482deb909a5abb8', None, '2023-10-01', 'Manual Payment', None, -10.0, 'pix', 'c1f87ead881b4fd38cb9fb7f54c3a39f', '2026-01-16 19:01:03.964181', '2026-01-16 19:01:03.964184')]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+_____________________________ test_pdate_payment ______________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000016E58EE7050>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE7DD0>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x0000016E5AAD4A70>
+parameters = [('996ce99643ee4c8cbf16a91820f50432', 'b2a61f359d984fa3bb1ad197295cf5d9', '5c08f8a7851c49af8c478a2552ab6430', None, '2023-10-01', 'Old Title', ...)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E58F8CEC0>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('996ce99643ee4c8cbf16a91820f50432', 'b2a61f359d984fa3bb1ad197295cf5d9', '5c08f8a7851c49af8c478a2552ab6430', None, '2023-10-01', 'Old Title', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE7DD0>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.IntegrityError: NOT NULL constraint failed: payments.bank_id
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+
+The above exception was the direct cause of the following exception:
+
+db_session = <sqlalchemy.orm.session.Session object at 0x0000016E58A27E50>
+token_data = TokenData(user_id='b2a61f35-9d98-4fa3-bb1a-d197295cf5d9')
+test_user = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...8175')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] User object at 0x16e58a27a50>
+sample_category = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Category object at 0x16e58fd6e00>
+sample_merchant = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Merchant object at 0x16e591a2570>
+
+    def test_pdate_payment(
+        db_session, token_data, test_user, sample_category, sample_merchant
+    ):
+        payment = Payment(
+            user_id=test_user.id,
+            category_id=sample_category.id,
+            merchant_id=sample_merchant.id,
+            title="Old Title",
+            date=date(2023, 10, 1),
+            amount=Decimal("-10.00"),
+        )
+        db_session.add(payment)
+>       db_session.commit()
+
+tests\payments\test_service.py:109: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:2030: in commit
+    trans.commit(_to_root=True)
+<string>:2: in commit
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1311: in commit
+    self._prepare_impl()
+<string>:2: in _prepare_impl
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1286: in _prepare_impl
+    self.session.flush()
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4331: in flush
+    self._flush(objects)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4466: in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\util\langhelpers.py:224: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4427: in _flush
+    flush_context.execute()
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:466: in execute
+    rec.execute(self)
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:642: in execute
+    util.preloaded.orm_persistence.save_obj(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:93: in save_obj
+    _emit_insert_statements(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:1233: in _emit_insert_statements
+    result = connection.execute(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1419: in execute
+    return meth(
+.venv\Lib\site-packages\sqlalchemy\sql\elements.py:527: in _execute_on_connection
+    return connection._execute_clauseelement(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1641: in _execute_clauseelement
+    ret = self._execute_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2363: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E58F8CEC0>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('996ce99643ee4c8cbf16a91820f50432', 'b2a61f359d984fa3bb1ad197295cf5d9', '5c08f8a7851c49af8c478a2552ab6430', None, '2023-10-01', 'Old Title', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE7DD0>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+E       [SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+E       [parameters: ('996ce99643ee4c8cbf16a91820f50432', 'b2a61f359d984fa3bb1ad197295cf5d9', '5c08f8a7851c49af8c478a2552ab6430', None, '2023-10-01', 'Old Title', None, -10.0, 'pix', 'df6cb796222c4e35b9c3fcd335de182c', '2026-01-16 19:01:04.868173', '2026-01-16 19:01:04.868175')]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+_____________________________ test_delete_payment _____________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000016E590BEED0>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE7F50>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x0000016E5AAD4A70>
+parameters = [('3af2dad19e6a49bea6c8181b357462ab', '00b7e4948e30412fb2e77ab4e478a04c', '180e21c7bb5742b68d40225e9b33f74e', None, '2023-10-01', 'To Delete', ...)]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E591DB240>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('3af2dad19e6a49bea6c8181b357462ab', '00b7e4948e30412fb2e77ab4e478a04c', '180e21c7bb5742b68d40225e9b33f74e', None, '2023-10-01', 'To Delete', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE7F50>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.IntegrityError: NOT NULL constraint failed: payments.bank_id
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+
+The above exception was the direct cause of the following exception:
+
+db_session = <sqlalchemy.orm.session.Session object at 0x0000016E59145750>
+token_data = TokenData(user_id='00b7e494-8e30-412f-b2e7-7ab4e478a04c')
+test_user = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...5027')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] User object at 0x16e59145c50>
+sample_category = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Category object at 0x16e59145850>
+sample_merchant = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Merchant object at 0x16e591ae710>
+
+    def test_delete_payment(
+        db_session, token_data, test_user, sample_category, sample_merchant
+    ):
+        payment = Payment(
+            user_id=test_user.id,
+            category_id=sample_category.id,
+            merchant_id=sample_merchant.id,
+            title="To Delete",
+            date=date(2023, 10, 1),
+            amount=Decimal("-10.00"),
+        )
+        db_session.add(payment)
+>       db_session.commit()
+
+tests\payments\test_service.py:132: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:2030: in commit
+    trans.commit(_to_root=True)
+<string>:2: in commit
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1311: in commit
+    self._prepare_impl()
+<string>:2: in _prepare_impl
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1286: in _prepare_impl
+    self.session.flush()
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4331: in flush
+    self._flush(objects)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4466: in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\util\langhelpers.py:224: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4427: in _flush
+    flush_context.execute()
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:466: in execute
+    rec.execute(self)
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:642: in execute
+    util.preloaded.orm_persistence.save_obj(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:93: in save_obj
+    _emit_insert_statements(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:1233: in _emit_insert_statements
+    result = connection.execute(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1419: in execute
+    return meth(
+.venv\Lib\site-packages\sqlalchemy\sql\elements.py:527: in _execute_on_connection
+    return connection._execute_clauseelement(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1641: in _execute_clauseelement
+    ret = self._execute_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2363: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E591DB240>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('3af2dad19e6a49bea6c8181b357462ab', '00b7e4948e30412fb2e77ab4e478a04c', '180e21c7bb5742b68d40225e9b33f74e', None, '2023-10-01', 'To Delete', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E58EE7F50>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+E       [SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+E       [parameters: ('3af2dad19e6a49bea6c8181b357462ab', '00b7e4948e30412fb2e77ab4e478a04c', '180e21c7bb5742b68d40225e9b33f74e', None, '2023-10-01', 'To Delete', None, -10.0, 'pix', 'e951ea03bb6a4289a25f3412eca900a7', '2026-01-16 19:01:05.475025', '2026-01-16 19:01:05.475027')]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+____________________________ test_search_payments _____________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x0000016E5B10CDD0>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E590BF410>
+
+    def _exec_insertmany_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for an "insertmanyvalues"
+        operation, which will invoke DBAPI
+        cursor.execute() one or more times with individual log and
+        event hook calls.
+    
+        """
+    
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+        else:
+            generic_setinputsizes = None
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters = parameters
+    
+        engine_events = self._has_events or self.engine._has_events
+        if self.dialect._has_events:
+            do_execute_dispatch: Iterable[Any] = (
+                self.dialect.dispatch.do_execute
+            )
+        else:
+            do_execute_dispatch = ()
+    
+        if engine_events:
+            _WORKAROUND_ISSUE_13018 = getattr(
+                self, "_WORKAROUND_ISSUE_13018", False
+            )
+        else:
+            _WORKAROUND_ISSUE_13018 = False
+    
+        if self._echo:
+            stats = context._get_cache_stats() + " (insertmanyvalues)"
+    
+        preserve_rowcount = context.execution_options.get(
+            "preserve_rowcount", False
+        )
+        rowcount = 0
+    
+        for imv_batch in dialect._deliver_insertmanyvalues_batches(
+            self,
+            cursor,
+            str_statement,
+            effective_parameters,
+            generic_setinputsizes,
+            context,
+        ):
+            if imv_batch.processed_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor,
+                        imv_batch.processed_setinputsizes,
+                        context,
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e,
+                        sql_util._long_statement(imv_batch.replaced_statement),
+                        imv_batch.replaced_parameters,
+                        None,
+                        context,
+                        is_sub_exec=True,
+                    )
+    
+            sub_stmt = imv_batch.replaced_statement
+            sub_params = imv_batch.replaced_parameters
+    
+            if engine_events:
+                for fn in self.dispatch.before_cursor_execute:
+                    sub_stmt, sub_params = fn(
+                        self,
+                        cursor,
+                        sub_stmt,
+                        sub_params,
+                        context,
+                        True,
+                    )
+    
+            if self._echo:
+                self._log_info(sql_util._long_statement(sub_stmt))
+    
+                imv_stats = f""" {imv_batch.batchnum}/{
+                            imv_batch.total_batches
+                } ({
+                    'ordered'
+                    if imv_batch.rows_sorted else 'unordered'
+                }{
+                    '; batch not supported'
+                    if imv_batch.is_downgraded
+                    else ''
+                })"""
+    
+                if imv_batch.batchnum == 1:
+                    stats += imv_stats
+                else:
+                    stats = f"insertmanyvalues{imv_stats}"
+    
+                if not self.engine.hide_parameters:
+                    self._log_info(
+                        "[%s] %r",
+                        stats,
+                        sql_util._repr_params(
+                            sub_params,
+                            batches=10,
+                            ismulti=False,
+                        ),
+                    )
+                else:
+                    self._log_info(
+                        "[%s] [SQL parameters hidden due to "
+                        "hide_parameters=True]",
+                        stats,
+                    )
+    
+            try:
+                for fn in do_execute_dispatch:
+                    if fn(
+                        cursor,
+                        sub_stmt,
+                        sub_params,
+                        context,
+                    ):
+                        break
+                else:
+>                   dialect.do_execute(
+                        cursor,
+                        sub_stmt,
+                        sub_params,
+                        context,
+                    )
+
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2125: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E5B24BC40>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_i...ALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('a9f473a8abfc4f5dadaf1c4ab1b2917f', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-01', 'Alpha', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E590BF410>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.IntegrityError: NOT NULL constraint failed: payments.bank_id
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+
+The above exception was the direct cause of the following exception:
+
+db_session = <sqlalchemy.orm.session.Session object at 0x0000016E58FB9220>
+token_data = TokenData(user_id='97c2ad84-78da-4251-bcab-4fa1da1f613e')
+test_user = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...1633')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] User object at 0x16e58fb8500>
+sample_category = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Category object at 0x16e59146d50>
+sample_merchant = <[PendingRollbackError("This Session's transaction has been rolled back due to a previous exception during flush. To b...')]\n(Background on this error at: https://sqlalche.me/e/20/gkpj)") raised in repr()] Merchant object at 0x16e591af250>
+
+    def test_search_payments(
+        db_session, token_data, test_user, sample_category, sample_merchant
+    ):
+        # Create 3 payments
+        p1 = Payment(
+            user_id=test_user.id,
+            category_id=sample_category.id,
+            merchant_id=sample_merchant.id,
+            title="Alpha",
+            date=date(2023, 10, 1),
+            amount=Decimal("-10"),
+        )
+        p2 = Payment(
+            user_id=test_user.id,
+            category_id=sample_category.id,
+            merchant_id=sample_merchant.id,
+            title="Beta",
+            date=date(2023, 10, 2),
+            amount=Decimal("-20"),
+        )
+        p3 = Payment(
+            user_id=test_user.id,
+            category_id=sample_category.id,
+            merchant_id=sample_merchant.id,
+            title="Gamma",
+            date=date(2023, 10, 3),
+            amount=Decimal("-30"),
+        )
+    
+        db_session.add_all([p1, p2, p3])
+>       db_session.commit()
+
+tests\payments\test_service.py:171: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:2030: in commit
+    trans.commit(_to_root=True)
+<string>:2: in commit
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1311: in commit
+    self._prepare_impl()
+<string>:2: in _prepare_impl
+    ???
+.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py:137: in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:1286: in _prepare_impl
+    self.session.flush()
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4331: in flush
+    self._flush(objects)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4466: in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\util\langhelpers.py:224: in __exit__
+    raise exc_value.with_traceback(exc_tb)
+.venv\Lib\site-packages\sqlalchemy\orm\session.py:4427: in _flush
+    flush_context.execute()
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:466: in execute
+    rec.execute(self)
+.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py:642: in execute
+    util.preloaded.orm_persistence.save_obj(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:93: in save_obj
+    _emit_insert_statements(
+.venv\Lib\site-packages\sqlalchemy\orm\persistence.py:1143: in _emit_insert_statements
+    result = connection.execute(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1419: in execute
+    return meth(
+.venv\Lib\site-packages\sqlalchemy\sql\elements.py:527: in _execute_on_connection
+    return connection._execute_clauseelement(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1641: in _execute_clauseelement
+    ret = self._execute_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1844: in _execute_context
+    return self._exec_insertmany_context(dialect, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2133: in _exec_insertmany_context
+    self._handle_dbapi_exception(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2363: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2125: in _exec_insertmany_context
+    dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x0000016E586D8980>
+cursor = <sqlite3.Cursor object at 0x0000016E5B24BC40>
+statement = 'INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_i...ALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+parameters = ('a9f473a8abfc4f5dadaf1c4ab1b2917f', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-01', 'Alpha', ...)
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x0000016E590BF410>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+E       [SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+E       [parameters: ('a9f473a8abfc4f5dadaf1c4ab1b2917f', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-01', 'Alpha', None, -10.0, 'pix', '4aa49b8a7cb14d289eaa771a84cdb6ea', '2026-01-16 19:01:06.081624', '2026-01-16 19:01:06.081626', 'a8eb76263dfc47cea83a9e83b9ace071', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-02', 'Beta', None, -20.0, 'pix', '4aa49b8a7cb14d289eaa771a84cdb6ea', '2026-01-16 19:01:06.081629', '2026-01-16 19:01:06.081630', 'd4f689d4c1994fc4ae42f4f22fb7e378', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-03', 'Gamma', None, -30.0, 'pix', '4aa49b8a7cb14d289eaa771a84cdb6ea', '2026-01-16 19:01:06.081632', '2026-01-16 19:01:06.081633')]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+=========================== short test summary info ===========================
+FAILED tests/payments/test_parsers.py::test_parse_invoice_valid_csv - AssertionError: assert PaymentMethodSchema(value='bill_payment', display_name='Pagamento de Fatura') == <PaymentMethod.BillPayment: 'bill_payment'>
+ +  where PaymentMethodSchema(value='bill_payment', display_name='Pagamento de Fatura') = PaymentImportResponse(id=None, date=datetime.date(2023, 10, 3), title='Pagamento recebido', amount=Decimal('100.00'), category=None, has_merchant=True, already_exists=False, payment_method=PaymentMethodSchema(value='bill_payment', display_name='Pagamento de Fatura')).payment_method
+ +  and   <PaymentMethod.BillPayment: 'bill_payment'> = PaymentMethod.BillPayment
+FAILED tests/payments/test_parsers.py::test_parse_statement_valid_csv - AssertionError: assert PaymentMethodSchema(value='debit_card', display_name='Cart\xe3o de D\xe9bito') == <PaymentMethod.DebitCard: 'debit_card'>
+ +  where PaymentMethodSchema(value='debit_card', display_name='Cart\xe3o de D\xe9bito') = PaymentImportResponse(id=None, date=datetime.date(2023, 10, 2), title='Padaria', amount=Decimal('-20.00'), category=None, has_merchant=True, already_exists=False, payment_method=PaymentMethodSchema(value='debit_card', display_name='Cart\xe3o de D\xe9bito')).payment_method
+ +  and   <PaymentMethod.DebitCard: 'debit_card'> = PaymentMethod.DebitCard
+FAILED tests/payments/test_service.py::test_create_payment - src.exceptions.payments.PaymentCreationError: 500: Falha na criaþÒo do pagamento: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+[SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('017324c1557342009fafe8004d69e782', '87133bd742664814b8c2d43375114e8f', 'd86d8e5318a6402e80bbee986e216586', None, '2023-10-01', 'Test Payment', None, -50.0, 'credit_card', '1916129e68cc43669c7fe95c10c9e9b6', '2026-01-16 19:01:03.312703', '2026-01-16 19:01:03.312705')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+FAILED tests/payments/test_service.py::test_get_payment_by_id - sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+[SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('190c3d354f9d47089c711e9ddb71e916', 'b204f4f6bbd444319e85478febcedcb9', 'bbc03533d925435c9482deb909a5abb8', None, '2023-10-01', 'Manual Payment', None, -10.0, 'pix', 'c1f87ead881b4fd38cb9fb7f54c3a39f', '2026-01-16 19:01:03.964181', '2026-01-16 19:01:03.964184')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+FAILED tests/payments/test_service.py::test_pdate_payment - sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+[SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('996ce99643ee4c8cbf16a91820f50432', 'b2a61f359d984fa3bb1ad197295cf5d9', '5c08f8a7851c49af8c478a2552ab6430', None, '2023-10-01', 'Old Title', None, -10.0, 'pix', 'df6cb796222c4e35b9c3fcd335de182c', '2026-01-16 19:01:04.868173', '2026-01-16 19:01:04.868175')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+FAILED tests/payments/test_service.py::test_delete_payment - sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+[SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('3af2dad19e6a49bea6c8181b357462ab', '00b7e4948e30412fb2e77ab4e478a04c', '180e21c7bb5742b68d40225e9b33f74e', None, '2023-10-01', 'To Delete', None, -10.0, 'pix', 'e951ea03bb6a4289a25f3412eca900a7', '2026-01-16 19:01:05.475025', '2026-01-16 19:01:05.475027')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+FAILED tests/payments/test_service.py::test_search_payments - sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: payments.bank_id
+[SQL: INSERT INTO payments (id, user_id, merchant_id, bank_id, date, title, description, amount, payment_method, category_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: ('a9f473a8abfc4f5dadaf1c4ab1b2917f', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-01', 'Alpha', None, -10.0, 'pix', '4aa49b8a7cb14d289eaa771a84cdb6ea', '2026-01-16 19:01:06.081624', '2026-01-16 19:01:06.081626', 'a8eb76263dfc47cea83a9e83b9ace071', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-02', 'Beta', None, -20.0, 'pix', '4aa49b8a7cb14d289eaa771a84cdb6ea', '2026-01-16 19:01:06.081629', '2026-01-16 19:01:06.081630', 'd4f689d4c1994fc4ae42f4f22fb7e378', '97c2ad8478da4251bcab4fa1da1f613e', '61b2018be6884e83a47609bbc4425fc4', None, '2023-10-03', 'Gamma', None, -30.0, 'pix', '4aa49b8a7cb14d289eaa771a84cdb6ea', '2026-01-16 19:01:06.081632', '2026-01-16 19:01:06.081633')]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+========================= 7 failed, 6 passed in 5.16s =========================

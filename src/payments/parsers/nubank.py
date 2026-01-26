@@ -5,8 +5,6 @@ from .base import BaseParser
 from src.payments.model import PaymentImportResponse
 from datetime import datetime
 from decimal import Decimal
-import csv
-import io
 import re
 
 

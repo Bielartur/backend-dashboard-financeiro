@@ -39,11 +39,17 @@ class PaymentMethod(enum.Enum):
         return labels.get(self.value, self.value)
 
 
+class TransactionType(enum.Enum):
+    INCOME = "income"
+    EXPENSE = "expense"
+
+    @property
+    def display_name(self):
+        return "Receita" if self == TransactionType.INCOME else "Despesa"
+
+
 class Payment(Base):
     __tablename__ = "payments"
-    __table_args__ = (
-        CheckConstraint("amount >= 0", name="check_payment_amount_positive"),
-    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
@@ -51,7 +57,7 @@ class Payment(Base):
     )
 
     # Normalização
-    merchant_id = Column(UUID(as_uuid=True), ForeignKey("merchants.id"), nullable=True)
+    merchant_id = Column(UUID(as_uuid=True), ForeignKey("merchants.id"), nullable=False)
 
     bank_id = Column(
         UUID(as_uuid=True), ForeignKey("banks.id"), nullable=False, index=True
@@ -60,8 +66,18 @@ class Payment(Base):
     title = Column(String, nullable=False, index=True)
     description = Column(String, nullable=True)
     amount = Column(DECIMAL, nullable=False)
+    type = Column(
+        Enum(TransactionType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=TransactionType.EXPENSE,
+    )
+    open_finance_id = Column(
+        String, nullable=True, unique=True, index=True
+    )  # ID da transação na Pluggy
     payment_method = Column(
-        Enum(PaymentMethod), nullable=False, default=PaymentMethod.Pix
+        Enum(PaymentMethod, values_callable=lambda obj: [e.value for e in obj]),
+        nullable=False,
+        default=PaymentMethod.Pix,
     )
     category_id = Column(
         UUID(as_uuid=True),

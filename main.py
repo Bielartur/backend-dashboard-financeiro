@@ -4,6 +4,7 @@ from src.database.core import engine, Base
 from src.entities.payment import Payment  # Import models to register them
 from src.entities.category import Category  # Import models to register them
 from src.entities.user import User  # Import models to register them
+from src.entities.open_finance_item import OpenFinanceItem
 from src.api import register_routes
 
 from src.logging import configure_logging, LogLevels

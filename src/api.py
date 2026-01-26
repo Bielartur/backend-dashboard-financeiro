@@ -4,11 +4,10 @@ from src.auth.controller import router as auth_router
 from src.users.controller import router as users_router
 from src.categories.controller import router as categories_router
 from src.merchants.controller import router as merchants_router
+from src.aliases.controller import router as aliases_router
 from src.banks.controller import router as banks_router
 from src.dashboard.controller import router as dashboard_router
-
-
-from src.aliases.controller import router as aliases_router
+from src.open_finance.controller import router as open_finance_router
 
 
 def register_routes(app: FastAPI):
@@ -20,3 +19,4 @@ def register_routes(app: FastAPI):
     app.include_router(auth_router)
     app.include_router(users_router)
     app.include_router(dashboard_router)
+    app.include_router(open_finance_router)

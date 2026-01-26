@@ -44,8 +44,8 @@ def get_categories(
     query = db.query(
         Category.id,
         Category.name,
+        UserCategorySetting.alias,
         Category.slug,
-        Category.type,
         func.coalesce(UserCategorySetting.color_hex, Category.color_hex).label(
             "color_hex"
         ),
@@ -55,7 +55,7 @@ def get_categories(
         UserCategorySetting,
         (UserCategorySetting.category_id == Category.id)
         & (UserCategorySetting.user_id == current_user.get_uuid()),
-    )
+    ).order_by(Category.name)
 
     logging.info(
         f"Recuperado todas as categorias pelo usuário {current_user.get_uuid()}"
@@ -72,8 +72,8 @@ def get_category_by_id(
         db.query(
             Category.id,
             Category.name,
+            UserCategorySetting.alias,
             Category.slug,
-            Category.type,
             func.coalesce(UserCategorySetting.color_hex, Category.color_hex).label(
                 "color_hex"
             ),
@@ -103,8 +103,8 @@ def get_category_by_id(
     return model.CategoryResponse(
         id=category.id,
         name=category.name,
+        alias=category.alias,
         slug=category.slug,
-        type=category.type,
         color_hex=category.color_hex,
         created_at=category.created_at,
         updated_at=category.updated_at,
@@ -130,11 +130,11 @@ def update_category(
     return get_category_by_id(current_user, db, category_id)
 
 
-def update_category_color(
+def update_category_settings(
     current_user: TokenData,
     db: Session,
     category_id: UUID,
-    color_update: model.CategoryColorUpdate,
+    settings_update: model.CategorySettingsUpdate,
 ) -> model.CategoryResponse:
     # Verify category exists
     verify_exists = db.query(Category.id).filter(Category.id == category_id).first()
@@ -150,17 +150,40 @@ def update_category_color(
     )
 
     if setting:
-        setting.color_hex = color_update.color_hex
+        if settings_update.color_hex is not None:
+            setting.color_hex = settings_update.color_hex
+        if settings_update.alias is not None:
+            # If alias is empty string, save as None
+            setting.alias = (
+                settings_update.alias if settings_update.alias.strip() != "" else None
+            )
     else:
+        # For new settings, use defaults if not provided (though model validation should handle required fields if any)
+        # But here alias is optional, color might be required by DB?
+        # Checking schema... UserCategorySetting.color_hex is NOT NULL.
+        # So if creating new setting, we MUST provide color.
+        # Check if color is in update, if not use existing category color?
+
+        # If color is missing in update, we fetch category default color
+        color_to_save = settings_update.color_hex
+        if not color_to_save:
+            cat_def = (
+                db.query(Category.color_hex).filter(Category.id == category_id).scalar()
+            )
+            color_to_save = cat_def
+
         setting = UserCategorySetting(
-            user_id=user_id, category_id=category_id, color_hex=color_update.color_hex
+            user_id=user_id,
+            category_id=category_id,
+            color_hex=color_to_save,
+            alias=settings_update.alias,
         )
         db.add(setting)
 
     db.commit()
 
     logging.info(
-        f"Cor da categoria {category_id} personalizada para {color_update.color_hex} pelo usuário {user_id}"
+        f"Configurações da categoria {category_id} personalizadas pelo usuário {user_id}"
     )
 
     return get_category_by_id(current_user, db, category_id)

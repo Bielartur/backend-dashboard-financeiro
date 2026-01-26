@@ -20,7 +20,7 @@ class PaymentMethodSchema(CamelModel):
 class PaymentBase(CamelModel):
     title: str
     date: date
-    amount: Decimal = Field(decimal_places=2, max_digits=10, ge=0)
+    amount: Decimal = Field(decimal_places=2, max_digits=10)
     payment_method: Optional[PaymentMethod] = None
     bank_id: UUID
 
@@ -34,7 +34,7 @@ class PaymentCreate(PaymentBase):
 class PaymentUpdate(CamelModel):
     title: Optional[str] = None
     date: Optional[datetime] = None
-    amount: Optional[Decimal] = Field(None, decimal_places=2, max_digits=10, ge=0)
+    amount: Optional[Decimal] = Field(None, decimal_places=2, max_digits=10)
     payment_method: Optional[PaymentMethod] = None
     bank_id: Optional[UUID] = None
     category_id: Optional[UUID] = None
