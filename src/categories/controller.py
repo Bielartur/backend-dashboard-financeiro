@@ -44,11 +44,13 @@ async def delete_category(db: DbSession, category_id: UUID, current_user: Curren
     return service.delete_category(current_user, db, category_id)
 
 
-@router.patch("/{category_id}/color", response_model=model.CategoryResponse)
-async def update_category_color(
+@router.put("/{category_id}/settings", response_model=model.CategoryResponse)
+async def update_category_settings(
     db: DbSession,
     category_id: UUID,
-    color_update: model.CategoryColorUpdate,
+    settings_update: model.CategorySettingsUpdate,
     current_user: CurrentUser,
 ):
-    return service.update_category_color(current_user, db, category_id, color_update)
+    return service.update_category_settings(
+        current_user, db, category_id, settings_update
+    )
