@@ -17,6 +17,7 @@ class MerchantAlias(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     pattern = Column(String, nullable=False)  # Ex: "Uber"
+    category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )

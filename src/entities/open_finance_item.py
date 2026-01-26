@@ -37,6 +37,9 @@ class OpenFinanceItem(Base):
 
     # Relationships
     bank = relationship("Bank", lazy="joined")
+    accounts = relationship(
+        "OpenFinanceAccount", back_populates="item", cascade="all, delete-orphan"
+    )
 
     created_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
