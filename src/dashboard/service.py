@@ -2,11 +2,12 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Dict, Tuple, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import extract, func, select, desc, literal, distinct, and_
+from sqlalchemy import extract, func, select, desc, literal_column, distinct, and_, text
+from sqlalchemy.sql.functions import coalesce
 from dateutil.relativedelta import relativedelta
 
-from src.entities.payment import Payment
-from src.entities.category import Category, CategoryType
+from src.entities.payment import Payment, TransactionType
+from src.entities.category import Category, UserCategorySetting
 from src.dashboard.model import (
     DashboardResponse,
     DashboardSummary,
@@ -46,6 +47,20 @@ MONTH_SHORT = {
     12: "Dez",
 }
 
+# Categories to exclude from dashboard totals
+EXCLUDED_CATEGORY_SLUGS = [
+    "transferencia-de-mesma-titularidade",
+    "transferencia-mesma-titularidade",
+    "transferencia-mesma-instituicao",
+    "transferencia-entre-contas",
+    "transferência-mesma-titularidade",
+    "transferência-mesma-instituição",
+]
+
+INVESTMENT_SLUGS = [
+    "investimentos",
+]
+
 
 def get_dashboard_data(
     db: Session, user_id: str, year_mode: str = "last-12"
@@ -60,12 +75,6 @@ def get_dashboard_data(
     summary = _get_global_summary(db, user_id, start_date, end_date)
 
     # 2. Rolling Averages for Categories (for comparison metrics)
-    # Always calculates based on the last 12 months relative to today (or relative to data?)
-    # To be consistent, rolling averages should probably align with the view or be strictly recent history.
-    # Let's keep rolling averages anchored to "Recent" (Today) for now to represent "current habits",
-    # OR match the view window. Matching valid window is safer for historical context.
-    # Let's keep it simple and use the same window or standard 12 months.
-    # The original code used standard 12 months from today. Let's stick to that for "current norms" unless requested.
     rolling_averages = _get_category_rolling_averages(db, user_id)
 
     # 3. Monthly Breakdown with Category Data (Aggregated in DB)
@@ -113,22 +122,101 @@ def _get_date_range(db: Session, user_id: Any, year_mode: str) -> Tuple[date, da
     return start_date, end_date
 
 
+def _get_category_tree_cte(db: Session, user_id: Any):
+    """
+    Constructs a Recursive CTE to resolve the Root Category for every Category.
+    It incorporates UserCategorySetting to override Name (alias) and Color.
+
+    It builds top-down:
+    - Root: Categories with parent_id IS NULL (themselves are roots).
+    - Recursive: Children join with parents to inherit the Root ID.
+
+    Returns a SQLAlchemy Selectable (CTE) with columns:
+    - category_id: The ID of the specific category (child or root)
+    - root_id: The ID of its top-level parent
+    - root_name: Effective Name (User Alias OR Global Name) of the top-level parent
+    - root_slug: Slug of the top-level parent
+    - root_color: Effective Color (User Color OR Global Color) of the top-level parent
+    """
+
+    # Alias for User Settings to join with Root Categories
+    # We only care about settings for the ROOT category, as children inherit Root visuals.
+    # Logic:
+    # 1. Identify Root Categories.
+    # 2. Left Join Root Categories with UserCategorySetting.
+    # 3. Select coalesce(setting.alias, category.name) and coalesce(setting.color, category.color)
+
+    # Anchor Member: Top-level categories (Roots)
+    # They are their own root.
+
+    # Prepare the UserCategorySetting subquery or join condition
+    # Since we are inside a CTE definition, it's safer to join explicitly in the select.
+
+    anchor = (
+        select(
+            Category.id.label("category_id"),
+            Category.id.label("root_id"),
+            # Use Coalesce to pick User Setting if available, else Default
+            coalesce(UserCategorySetting.alias, Category.name).label("root_name"),
+            Category.slug.label("root_slug"),
+            coalesce(UserCategorySetting.color_hex, Category.color_hex).label(
+                "root_color"
+            ),
+        )
+        .outerjoin(
+            UserCategorySetting,
+            and_(
+                UserCategorySetting.category_id == Category.id,
+                UserCategorySetting.user_id == user_id,
+            ),
+        )
+        .where(Category.parent_id.is_(None))
+    )
+
+    cte = anchor.cte(name="category_tree", recursive=True)
+
+    # Recursive Member: Join children to the existing tree
+    # The child inherits the root_id, root_name, root_color from the parent row in the CTE.
+    # Note: Children DO NOT have their own settings override in this Logic.
+    # Visuals are inherited from the Root Category.
+    # If a Child Category has separate settings, we are ignoring them here to maintain "Root Grouping".
+    child = select(
+        Category.id.label("category_id"),
+        cte.c.root_id,
+        cte.c.root_name,
+        cte.c.root_slug,
+        cte.c.root_color,
+    ).join(cte, Category.parent_id == cte.c.category_id)
+
+    # Combine
+    category_tree = cte.union_all(child)
+
+    return category_tree
+
+
 def _get_global_summary(
     db: Session, user_id: Any, start_date: date, end_date: date
 ) -> DashboardSummary:
     """
-    Calculates total revenue and expenses entirely in SQL.
+    Calculates total revenue and expenses, excluding transfers and investments.
+    Investments are calculated separately as a net result.
     """
-    # Join Category to filter by type
+    category_tree = _get_category_tree_cte(db, user_id)
+
+    # Standard Revenue/Expenses (Excluding Investments & Transfers)
+    # Group by Payment.type
     statement = (
-        select(Category.type, func.sum(Payment.amount).label("total"))
-        .join(Category, Payment.category_id == Category.id)
+        select(Payment.type, func.sum(Payment.amount).label("total"))
+        .join(category_tree, Payment.category_id == category_tree.c.category_id)
         .where(
             Payment.user_id == user_id,
             Payment.date >= start_date,
             Payment.date <= end_date,
+            category_tree.c.root_slug.notin_(
+                EXCLUDED_CATEGORY_SLUGS + INVESTMENT_SLUGS
+            ),
         )
-        .group_by(Category.type)
+        .group_by(Payment.type)
     )
 
     results = db.execute(statement).all()
@@ -136,86 +224,82 @@ def _get_global_summary(
     total_revenue = Decimal(0)
     total_expenses = Decimal(0)
 
-    for category_type, total in results:
+    for payment_type, total in results:
         total = (total or Decimal(0)).quantize(Decimal("0.01"))
-        if category_type == CategoryType.INCOME:
+
+        if payment_type == TransactionType.INCOME:
             total_revenue += total
-        elif category_type == CategoryType.EXPENSE:
+        elif payment_type == TransactionType.EXPENSE:
             total_expenses += total
+
+    # Calculate Net Investment Result
+    # Sum of ALL investment transactions (Income + Expense)
+    # Income (Redemption) is positive, Expense (Application) is negative.
+    inv_statement = (
+        select(func.sum(Payment.amount).label("net_total"))
+        .join(category_tree, Payment.category_id == category_tree.c.category_id)
+        .where(
+            Payment.user_id == user_id,
+            Payment.date >= start_date,
+            Payment.date <= end_date,
+            category_tree.c.root_slug.in_(INVESTMENT_SLUGS),
+        )
+    )
+
+    inv_result = db.execute(inv_statement).scalar()
+    # User Request:
+    # If I redeemed more than I invested (Net positive cash flow), it means I REMOVED money from investments -> Negative Sign.
+    # If I invested more than I redeemed (Net negative cash flow), it means I ADDED money to investments -> Positive Sign.
+    # So we invert the natural cash flow sign.
+    # Natural: Income (Redemption) is +, Expense (Application) is -.
+    # Desired: Income is -, Expense is +.
+    total_investments = ((inv_result or Decimal(0)) * Decimal("-1")).quantize(
+        Decimal("0.01")
+    )
 
     return DashboardSummary(
         total_revenue=total_revenue.quantize(Decimal("0.01")),
         total_expenses=total_expenses.quantize(Decimal("0.01")),
-        # Expenses are negative, so we ADD them to revenue to get net balance
+        # Balance = Revenue + Expenses (Expenses are negative)
         balance=(total_revenue + total_expenses).quantize(Decimal("0.01")),
+        total_investments=total_investments,
     )
 
 
 def _get_category_rolling_averages(db: Session, user_id: Any) -> Dict[str, Decimal]:
     """
-    Calculates the average monthly spending per category over the last 12 months.
-    Formula: Total Spent / 12 (Simple moving average)
+    Calculates the average monthly spending per ROOT category over the last 12 months.
     """
     today = date.today()
     start_date = today.replace(day=1) - relativedelta(months=11)
 
+    category_tree = _get_category_tree_cte(db, user_id)
+
     statement = (
         select(
-            Category.slug,
+            category_tree.c.root_slug,
             func.sum(Payment.amount).label("total"),
             func.count(distinct(extract("month", Payment.date))).label("months_count"),
         )
-        .join(Category, Payment.category_id == Category.id)
-        .where(Payment.user_id == user_id, Payment.date >= start_date)
-        .group_by(Category.slug)
+        .join(category_tree, Payment.category_id == category_tree.c.category_id)
+        .where(
+            Payment.user_id == user_id,
+            Payment.date >= start_date,
+            category_tree.c.root_slug.notin_(EXCLUDED_CATEGORY_SLUGS),
+        )
+        .group_by(category_tree.c.root_slug)
     )
 
     results = db.execute(statement).all()
 
-    # Map category_slug -> average
-    # Division by months_count ensures we average against months containing data
     return {
-        row.slug: (
+        row.root_slug: (
             (row.total / row.months_count).quantize(Decimal("0.01"))
             if row.months_count > 0
             else Decimal(0)
         )
         for row in results
     }
-
-
-def _fill_missing_months(
-    start_date: date, end_date: date, existing_data: Dict[Tuple[int, int], Any]
-) -> List[MonthlyData]:
-    """
-    Ensures all months in the range exist in the output, even if empty.
-    """
-    filled_data = []
-
-    current_date = start_date.replace(day=1)
-    while current_date <= end_date:
-        key = (current_date.year, current_date.month)
-
-        if key in existing_data:
-            filled_data.append(existing_data[key])
-        else:
-            # Create empty month record
-            filled_data.append(
-                MonthlyData(
-                    month=MONTH_NAMES.get(current_date.month, ""),
-                    month_short=MONTH_SHORT.get(current_date.month, ""),
-                    year=current_date.year,
-                    revenue=Decimal(0),
-                    expenses=Decimal(0),
-                    balance=Decimal(0),
-                    categories=[],
-                )
-            )
-
-        # Next month
-        current_date = current_date + relativedelta(months=1)
-
-    return filled_data
 
 
 def _get_monthly_breakdown(
@@ -226,35 +310,40 @@ def _get_monthly_breakdown(
     averages_map: Dict[str, Decimal],
 ) -> List[MonthlyData]:
     """
-    Fetches monthly data grouped by (Month, Category) via SQL Aggregation.
+    Fetches monthly data grouped by (Month, ROOT Category, Payment Type).
+    We group by Payment Type as well to correctly attribute Revenue/Expenses totals,
+    then we merge them into the Category line item.
     """
 
-    # Query: Year, Month, Category Details, Sum(Amount)
+    category_tree = _get_category_tree_cte(db, user_id)
+
+    # Query: Year, Month, Root Category, Payment Type, Sum(Amount)
     statement = (
         select(
             extract("year", Payment.date).label("year"),
             extract("month", Payment.date).label("month"),
-            Category.id.label("category_id"),
-            Category.name.label("category_name"),
-            Category.slug.label("category_slug"),
-            Category.color_hex.label("category_color"),  # Ensure color is fetched
-            Category.type.label("category_type"),
+            category_tree.c.root_id.label("category_id"),
+            category_tree.c.root_name.label("category_name"),
+            category_tree.c.root_slug.label("category_slug"),
+            category_tree.c.root_color.label("category_color"),
+            Payment.type.label("payment_type"),
             func.sum(Payment.amount).label("total"),
         )
-        .join(Category, Payment.category_id == Category.id)
+        .join(category_tree, Payment.category_id == category_tree.c.category_id)
         .where(
             Payment.user_id == user_id,
             Payment.date >= start_date,
             Payment.date <= end_date,
+            category_tree.c.root_slug.notin_(EXCLUDED_CATEGORY_SLUGS),
         )
         .group_by(
             extract("year", Payment.date),
             extract("month", Payment.date),
-            Category.id,
-            Category.name,
-            Category.slug,
-            Category.color_hex,
-            Category.type,
+            category_tree.c.root_id,
+            category_tree.c.root_name,
+            category_tree.c.root_slug,
+            category_tree.c.root_color,
+            Payment.type,
         )
         .order_by(
             extract("year", Payment.date),
@@ -265,8 +354,11 @@ def _get_monthly_breakdown(
     results = db.execute(statement).all()
 
     # Process results into nested structure...
-    # (Existing map logic)
     monthly_map: Dict[Tuple[int, int], MonthlyData] = {}
+
+    # Helper to track category metrics indices in the list
+    # key: (year, month, slug) -> index in monthly_map[(year, month)].categories
+    cat_metric_map: Dict[Tuple[int, int, str], int] = {}
 
     for row in results:
         year = int(row.year)
@@ -281,53 +373,80 @@ def _get_monthly_breakdown(
                 revenue=Decimal(0),
                 expenses=Decimal(0),
                 balance=Decimal(0),
+                investments=Decimal(0),
                 categories=[],
             )
 
         amount = (row.total or Decimal(0)).quantize(Decimal("0.01"))
+        payment_type = row.payment_type
+        cat_slug = row.category_slug
 
-        # Calculate metrics
-        average = averages_map.get(row.category_slug, Decimal(0))
+        # Check if it's an investment
+        is_investment = cat_slug in INVESTMENT_SLUGS
 
-        # Use simple magnitude comparison for status
-        # This works for both Income (positive) and Expense (negative)
-        # "above_average" means "higher magnitude" (more spent OR more earned)
-        # "below_average" means "lower magnitude" (less spent OR less earned)
+        # Update Monthly Totals
+        if is_investment:
+            # Add to investments total.
+            # Inverting sign as per request: Application (Expense, negative) should increase investment total (positive).
+            # Redemption (Income, positive) should decrease investment total (negative).
+            monthly_map[key].investments += amount * Decimal("-1")
+        else:
+            # Regular Revenue/Expenses
+            if payment_type == TransactionType.INCOME:
+                monthly_map[key].revenue += amount
+                monthly_map[key].balance += amount
+            elif payment_type == TransactionType.EXPENSE:
+                monthly_map[key].expenses += amount
+                monthly_map[key].balance += amount
 
-        abs_amount = abs(amount)
-        abs_average = abs(average)
+        # Handle Category Metric Merging (We still want to show investments in the category list?)
+        # User said "separar ele na parte do dashboard", usually this implies totals.
+        # But showing them in the list is fine, they just shouldn't affect the top-level Revenue/Expense cards.
 
-        status = "average"
-        # Use Decimal for multiplication to avoid TypeError
-        if abs_amount > abs_average * Decimal("1.2"):
-            status = "above_average"
-        elif abs_amount < abs_average * Decimal("0.8"):
-            status = "below_average"
+        cat_key = (year, month, cat_slug)
 
-        # Add Category Metric
-        monthly_map[key].categories.append(
-            CategoryMetric(
+        if cat_key in cat_metric_map:
+            # Update existing metric
+            idx = cat_metric_map[cat_key]
+            metric = monthly_map[key].categories[idx]
+            metric.total += amount
+            # Recalculate status/type happens partially here or post-loop
+        else:
+            new_metric = CategoryMetric(
                 name=row.category_name,
                 slug=row.category_slug,
                 color_hex=row.category_color,
-                type=row.category_type,
+                type=payment_type,
                 total=amount,
-                average=average,
-                status=status,
+                average=Decimal(0),
+                status="average",
             )
-        )
+            monthly_map[key].categories.append(new_metric)
+            cat_metric_map[cat_key] = len(monthly_map[key].categories) - 1
 
-        # Update Totals
-        if row.category_type == CategoryType.INCOME:
-            monthly_map[key].revenue += amount
-            monthly_map[key].balance += amount
-        elif row.category_type == CategoryType.EXPENSE:
-            monthly_map[key].expenses += amount
-            # Amount is already negative for expenses, so we ADD it to balance to decrease it.
-            monthly_map[key].balance += amount
+    # Post-process categories to set final Type, Average, Status
+    for key, m_data in monthly_map.items():
+        for metric in m_data.categories:
+            # Set Average
+            average = averages_map.get(metric.slug, Decimal(0))
+            metric.average = average
 
-    # Fill gaps -> NOW REMOVED based on new requirement
-    # We just return the sorted map values
+            # Set Type based on Net Total
+            if metric.total >= 0:
+                metric.type = TransactionType.INCOME
+            else:
+                metric.type = TransactionType.EXPENSE
+
+            # Set Status
+            abs_amount = abs(metric.total)
+            abs_average = abs(average)
+
+            status = "average"
+            if abs_amount > abs_average * Decimal("1.2"):
+                status = "above_average"
+            elif abs_amount < abs_average * Decimal("0.8"):
+                status = "below_average"
+            metric.status = status
 
     sorted_keys = sorted(monthly_map.keys())
     return [monthly_map[k] for k in sorted_keys]
@@ -337,7 +456,6 @@ def get_available_months(db: Session, user_id: Any) -> List[DashboardAvailableMo
     """
     Returns a list of years where the user has payments, plus 'last-12'.
     """
-    # Query distinct years from payments
     statement = (
         select(distinct(extract("year", Payment.date)).label("year"))
         .where(Payment.user_id == user_id)

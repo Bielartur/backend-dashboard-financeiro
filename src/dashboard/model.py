@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import List, Optional, Literal
 from src.schemas.base import CamelModel
-from src.entities.category import CategoryType
+from src.entities.payment import TransactionType
 
 
 class DashboardSummary(CamelModel):
@@ -22,11 +22,11 @@ class CategoryMetric(CamelModel):
     name: str
     slug: str
     color_hex: str
-    type: CategoryType
+    type: TransactionType
     total: Decimal
     average: Decimal
     # Status: 'above_average', 'below_average', 'average'
-    status: Literal['above_average', 'below_average', 'average']
+    status: Literal["above_average", "below_average", "average"]
 
 
 class MonthlyData(CamelModel):

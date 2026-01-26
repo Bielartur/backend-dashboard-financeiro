@@ -11,7 +11,7 @@ from ..auth.model import TokenData
 from ..entities.payment import Payment, PaymentMethod
 from ..entities.merchant import Merchant
 from ..entities.merchant_alias import MerchantAlias
-from ..entities.category import Category, CategoryType
+from ..entities.category import Category
 from ..entities.bank import Bank
 from ..exceptions.payments import (
     PaymentCreationError,
@@ -142,6 +142,10 @@ def bulk_create_payment(
                         model.PaymentMethod.CreditCard.value
                     )
 
+                # Ensure bank_id is passed if present in payment_data (which comes from enriched transaction)
+                if payment_data.bank_id:
+                    processed_data["bank_id"] = payment_data.bank_id
+
                 payments_dicts.append(processed_data)
 
         except PaymentCreationError as e:
@@ -222,7 +226,34 @@ def _process_payment_merchant_and_category(
     final_category_id = None
     is_expense = payment_data.amount < 0
 
-    if payment_data.category_id:
+    # 0. Check for Alias Group Category Override
+    # Re-fetch alias to ensure we have the latest (including relation if needed, though we have merchant.merchant_alias_id)
+    # Optimization: Use the merchant's alias relationship if eager loaded or fetch it.
+    # Since we didn't eager load 'merchant_alias' in the query at line 198, let's fetch it if needed or assume we can rely on ID.
+    alias_override_category_id = None
+    if merchant.merchant_alias_id:
+        alias = (
+            db.query(MerchantAlias)
+            .filter(MerchantAlias.id == merchant.merchant_alias_id)
+            .first()
+        )
+        if alias and alias.category_id:
+            alias_override_category_id = alias.category_id
+            # logging.info(f"Alias overriding category: Using {alias.category_id} instead of Pluggy/Merchant defaults.")
+
+    if alias_override_category_id:
+        final_category_id = alias_override_category_id
+
+    # 1. Use explicit category if provided (and no alias override? Or does alias override explicit too?
+    # Usually explicit user choice (e.g. editing) beats all. But here payment_data comes from Pluggy usually.
+    # If payment_data.category_id comes from Pluggy, alias should override it.
+    # If payment_data.category_id comes from USER Manual Input, it should usually win.
+    # How to distinguish? "payment_data" is generic.
+    # Assumption for Import/Sync: logic here is for "Identification".
+    # If the user specifically set a category in an alias group, they WANT that category for these merchants.
+    # So Alias Override > Pluggy Category.
+
+    elif payment_data.category_id:
         final_category_id = payment_data.category_id
 
         # Determine which slot to update based on transaction sign
@@ -460,10 +491,16 @@ async def import_payments_from_csv(
             min_date = min(t.date for t in transactions)
             max_date = max(t.date for t in transactions)
 
-            # Fetch bank details based on source
-            # Assuming source.value corresponds to bank.slug (e.g. "nubank", "itau")
+            # Fetch bank details based on source lookup strategy
+            # If source is explicit enum (NUBANK, ITAU), map to our synced bank slugs/names
             bank_slug = source.value
-            bank_obj = db.query(Bank).filter(Bank.slug == bank_slug).first()
+
+            # Map known enums to expected slugs in DB (or matching logic)
+            # This relies on slugs generated in BankSyncService: name.lower().replace(" ", "-")
+            # NUBANK -> nubank
+            # ITAU -> itau-unibanco
+
+            bank_obj = db.query(Bank).filter(Bank.slug.ilike(f"%{bank_slug}%")).first()
 
             query = db.query(Payment).filter(
                 Payment.user_id == current_user.get_uuid(),
@@ -473,6 +510,13 @@ async def import_payments_from_csv(
 
             if bank_obj:
                 query = query.filter(Payment.bank_id == bank_obj.id)
+            else:
+                logging.warning(
+                    f"Banco desconhecido ou não suportado encontrado na importação: {bank_slug}"
+                )
+                raise PaymentImportError(
+                    f"O banco '{bank_slug}' ainda não é suportado pelo sistema. Em breve ele estará disponível!"
+                )
 
             existing_query = query.all()
 
@@ -628,6 +672,9 @@ async def import_payments_from_csv(
         ):
             transaction.has_merchant = False
 
+        if bank_obj:
+            transaction.bank_id = bank_obj.id
+
         transaction.category = category_response
 
         # Check for duplicates
@@ -668,3 +715,33 @@ async def import_payments_from_csv(
         )
     )
     return enriched_transactions
+
+
+def update_payments_category_bulk(
+    db: Session,
+    user_id: UUID,
+    merchant_ids: List[UUID],
+    category_id: UUID | None,
+) -> int:
+    """
+    Atualiza em massa a categoria de todos os pagamentos vinculados aos merchants fornecidos.
+    Executa um único comando UPDATE no banco de dados para alta performance.
+    """
+    if not merchant_ids:
+        return 0
+
+    stmt = (
+        model.Payment.__table__.update()
+        .where(model.Payment.user_id == user_id)
+        .where(model.Payment.merchant_id.in_(merchant_ids))
+        .values(category_id=category_id)
+    )
+
+    result = db.execute(stmt)
+    updated_count = result.rowcount
+    db.commit()
+
+    logging.info(
+        f"Bulk update: {updated_count} pagamentos atualizados para categoria {category_id} (Merchants: {len(merchant_ids)})"
+    )
+    return updated_count
