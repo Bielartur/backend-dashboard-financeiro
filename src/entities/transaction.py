@@ -6,20 +6,25 @@ from sqlalchemy import (
     ForeignKey,
     DECIMAL,
     CheckConstraint,
+    UniqueConstraint,
+    Enum,
+    text,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime, timezone
 from ..database.core import Base
-from sqlalchemy import Enum
 import enum
 
 
-class PaymentMethod(enum.Enum):
+class TransactionMethod(enum.Enum):
     Pix = "pix"
     CreditCard = "credit_card"
     DebitCard = "debit_card"
+    BankTransfer = "bank_transfer"
+    Cash = "cash"
     Boleto = "boleto"
     BillPayment = "bill_payment"
     InvestmentRedemption = "investment_redemption"
@@ -31,6 +36,8 @@ class PaymentMethod(enum.Enum):
             "pix": "Pix",
             "credit_card": "Cartão de Crédito",
             "debit_card": "Cartão de Débito",
+            "bank_transfer": "Transferência Bancária",
+            "cash": "Dinheiro",
             "boleto": "Boleto",
             "bill_payment": "Pagamento de Fatura",
             "investment_redemption": "Resgate de Investimento",
@@ -48,10 +55,15 @@ class TransactionType(enum.Enum):
         return "Receita" if self == TransactionType.INCOME else "Despesa"
 
 
-class Payment(Base):
-    __tablename__ = "payments"
+class Transaction(Base):
+    __tablename__ = "transactions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
@@ -70,14 +82,16 @@ class Payment(Base):
         Enum(TransactionType, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         default=TransactionType.EXPENSE,
+        server_default=text("'expense'"),
     )
     open_finance_id = Column(
-        String, nullable=True, unique=True, index=True
+        String, nullable=True, index=True
     )  # ID da transação na Pluggy
     payment_method = Column(
-        Enum(PaymentMethod, values_callable=lambda obj: [e.value for e in obj]),
+        Enum(TransactionMethod, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
-        default=PaymentMethod.Pix,
+        default=TransactionMethod.Pix,
+        server_default=text("'pix'"),
     )
     category_id = Column(
         UUID(as_uuid=True),
@@ -85,13 +99,23 @@ class Payment(Base):
         nullable=False,
     )
     created_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     updated_at = Column(
         DateTime,
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "open_finance_id", name="uq_transaction_user_open_finance_id"
+        ),
     )
 
     # Relationships
@@ -100,4 +124,4 @@ class Payment(Base):
     bank = relationship("Bank", lazy="joined")
 
     def __repr__(self):
-        return f"<Payment(date='{self.date}', title='{self.title}', amount='{self.amount}', category_id='{self.category_id}')>"
+        return f"<Transaction(date='{self.date}', title='{self.title}', amount='{self.amount}', category_id='{self.category_id}')>"

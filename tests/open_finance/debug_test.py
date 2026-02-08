@@ -4,10 +4,10 @@ import uuid
 from src.open_finance import service
 from src.entities.open_finance_item import OpenFinanceItem, ItemStatus
 from src.entities.open_finance_account import OpenFinanceAccount, AccountType
-from src.entities.category import Category, CategoryType
+from src.entities.category import Category
 from src.entities.merchant import Merchant
 from src.entities.merchant_alias import MerchantAlias
-from src.entities.payment import Payment, PaymentMethod
+from src.entities.transaction import Transaction, TransactionMethod
 
 
 async def main():
@@ -41,7 +41,6 @@ async def main():
         name="Groceries",
         slug="groceries",
         color_hex="#000000",
-        type=CategoryType.EXPENSE,
     )
 
     def side_effect_query(model):
@@ -57,7 +56,7 @@ async def main():
             m.filter.return_value.first.return_value = None
         elif model == Merchant:
             m.filter.return_value.first.return_value = None
-        elif model == Payment:
+        elif model == Transaction:
             m.filter.return_value.first.return_value = None
         return m
 

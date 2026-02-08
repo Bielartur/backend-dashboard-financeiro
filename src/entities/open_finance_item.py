@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Enum
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Enum, text, func
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 import enum
@@ -19,7 +19,12 @@ class ItemStatus(enum.Enum):
 class OpenFinanceItem(Base):
     __tablename__ = "open_finance_items"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
@@ -42,13 +47,17 @@ class OpenFinanceItem(Base):
     )
 
     created_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     updated_at = Column(
         DateTime,
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
 
     def __repr__(self):

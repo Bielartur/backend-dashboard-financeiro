@@ -9,7 +9,7 @@ class BankBase(CamelModel):
     name: str
     slug: Optional[str] = None
     logo_url: str
-    color_hex: constr(pattern=r"^#[0-9A-Fa-f]{6}$")  # Validação de cor hex
+    color_hex: constr(pattern=r"^#[0-9A-Fa-f]{6}$")
 
 
 class BankCreate(BankBase):

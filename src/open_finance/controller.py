@@ -133,6 +133,59 @@ def sync_transactions(
         raise HTTPException(status_code=400, detail="ID inválido")
 
 
+@router.post("/accounts/{id}/sync", status_code=status.HTTP_200_OK)
+def sync_account_transactions(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: TokenData = Depends(get_current_user),
+):
+    """
+    Triggers manual synchronization of transactions for a specific Open Finance Account.
+    Returns a StreamingResponse that yields progress updates as Newline Delimited JSON.
+    """
+
+    try:
+        account_uuid = uuid.UUID(id)
+        user_uuid = uuid.UUID(str(current_user.user_id))
+
+        async def event_generator():
+            # 1. Yield started message
+            yield SyncProgressResponse(
+                status="processing", message="Sincronizando conta..."
+            ).model_dump_json() + "\n"
+
+            # Allow the first chunk to reach the client
+            await asyncio.sleep(0.1)
+
+            try:
+                # 2. Perform the potentially long running tasks
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: service.sync_transactions_for_account(
+                        account_uuid, user_uuid, db
+                    ),
+                )
+
+                # 3. Yield completion message
+                yield SyncProgressResponse(
+                    status="completed", message="Conta sincronizada com sucesso."
+                ).model_dump_json() + "\n"
+            except Exception as e:
+
+                logging.error(f"Account Sync error: {e}")
+                yield SyncProgressResponse(
+                    status="error", message=f"Erro na sincronização: {str(e)}"
+                ).model_dump_json() + "\n"
+
+        return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+    except ValueError:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=400, detail="ID inválido")
+
+
 @router.post("/sync", status_code=status.HTTP_200_OK, response_model=SyncResponse)
 async def sync_data(db: Session = Depends(get_db)):
     """

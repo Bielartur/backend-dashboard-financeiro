@@ -1,6 +1,7 @@
 from uuid import UUID
 from pydantic import EmailStr, BaseModel
 from src.schemas.base import CamelModel
+from typing import List
 
 
 class RegisterUserRequest(CamelModel):
@@ -8,6 +9,15 @@ class RegisterUserRequest(CamelModel):
     first_name: str
     last_name: str
     password: str
+
+
+class User(CamelModel):
+    id: UUID
+    email: EmailStr
+    item_ids: List[UUID] = []
+    first_name: str
+    last_name: str
+    is_admin: bool
 
 
 class Token(BaseModel):

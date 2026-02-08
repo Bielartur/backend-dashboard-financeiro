@@ -5,7 +5,7 @@ from uuid import UUID
 from ..database.core import DbSession
 from . import model
 from . import service
-from ..auth.service import CurrentUser
+from ..auth.service import CurrentUser, CurrentAdmin
 
 router = APIRouter(prefix="/categories", tags=["Categories"])
 
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/categories", tags=["Categories"])
     "/", response_model=model.CategoryResponse, status_code=status.HTTP_201_CREATED
 )
 async def create_category(
-    db: DbSession, category: model.CategoryCreate, current_user: CurrentUser
+    db: DbSession, category: model.CategoryCreate, current_user: CurrentAdmin
 ):
     return service.create_category(current_user, db, category)
 
@@ -22,6 +22,21 @@ async def create_category(
 @router.get("/", response_model=List[model.CategoryResponse])
 async def get_categories(db: DbSession, current_user: CurrentUser):
     return service.get_categories(current_user, db)
+
+
+from ..schemas.pagination import PaginatedResponse
+from fastapi import Query
+
+
+@router.get("/search", response_model=PaginatedResponse[model.CategoryResponse])
+async def search_categories(
+    db: DbSession,
+    current_user: CurrentUser,
+    query: str = Query(default="", alias="q"),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=12, ge=1, le=100),
+):
+    return service.search_categories(current_user, db, query, page, limit)
 
 
 @router.get("/{category_id}", response_model=model.CategoryResponse)
@@ -34,13 +49,13 @@ async def update_category(
     db: DbSession,
     category_id: UUID,
     category_update: model.CategoryUpdate,
-    current_user: CurrentUser,
+    current_user: CurrentAdmin,
 ):
     return service.update_category(current_user, db, category_id, category_update)
 
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_category(db: DbSession, category_id: UUID, current_user: CurrentUser):
+async def delete_category(db: DbSession, category_id: UUID, current_user: CurrentAdmin):
     return service.delete_category(current_user, db, category_id)
 
 

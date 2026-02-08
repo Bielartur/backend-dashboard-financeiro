@@ -3,6 +3,7 @@ import re
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from .client import client
 import uuid
@@ -18,8 +19,9 @@ from .model import (
     OpenFinanceTransaction,
     CreateItemRequest,
     ItemResponse,
+    AccountSummary,
 )
-from src.entities.payment import Payment, PaymentMethod, TransactionType
+from src.entities.transaction import Transaction, TransactionMethod, TransactionType
 from src.entities.category import Category
 from src.entities.merchant import Merchant
 from src.entities.merchant_alias import MerchantAlias
@@ -103,12 +105,34 @@ def get_items_by_user(user_id: uuid.UUID, db: Session) -> List[ItemResponse]:
         bank = db.query(Bank).filter(Bank.id == item.bank_id).first()
         bank_name = bank.name if bank else "Banco Desconhecido"
 
+        # Fetch accounts
+        accounts = (
+            db.query(OpenFinanceAccount)
+            .filter(OpenFinanceAccount.item_id == item.id)
+            .all()
+        )
+        accounts_summary = [
+            AccountSummary(
+                id=str(acc.id),
+                name=acc.name,
+                number=acc.number,
+                type=acc.type.value if hasattr(acc.type, "value") else str(acc.type),
+                balance=acc.balance,
+            )
+            for acc in accounts
+        ]
+
+        print(accounts_summary)
+
         response.append(
             ItemResponse(
                 id=str(item.id),
                 pluggy_item_id=item.pluggy_item_id,
                 bank_name=bank_name,
                 status=item.status.value,
+                logo_url=bank.logo_url if bank else None,
+                color_hex=bank.color_hex if bank else None,
+                accounts=accounts_summary,
             )
         )
     return response
@@ -174,6 +198,8 @@ def create_item(
             pluggy_item_id=item_to_return.pluggy_item_id,
             bank_name=bank.name,
             status=item_to_return.status.value,
+            logo_url=bank.logo_url,
+            primary_color=bank.color_hex,
         )
 
     except HTTPException as he:
@@ -251,7 +277,9 @@ def sync_data(db: Session) -> Dict[str, str]:
         )
 
 
-def _get_payment_method_from_transaction(transaction: Dict[str, Any]) -> PaymentMethod:
+def _get_payment_method_from_transaction(
+    transaction: Dict[str, Any],
+) -> TransactionMethod:
     """Helper to determine payment method from Pluggy transaction data."""
     t_type = transaction.get("type", "").upper()
     payment_data = transaction.get("paymentData", {}) or {}
@@ -259,27 +287,27 @@ def _get_payment_method_from_transaction(transaction: Dict[str, Any]) -> Payment
 
     # 1. Credit Card Check (User requested specific check for consistency)
     if transaction.get("creditCardMetadata"):
-        return PaymentMethod.CreditCard
+        return TransactionMethod.CreditCard
 
     # 2. Check Operation Type & Payment Data (Pix, Boleto, Transfers)
     if "PIX" in operation_type or payment_data.get("paymentMethod") == "PIX":
-        return PaymentMethod.Pix
+        return TransactionMethod.Pix
 
     if "BOLETO" in operation_type or payment_data.get("paymentMethod") == "BOLETO":
-        return PaymentMethod.Boleto
+        return TransactionMethod.Boleto
 
     if "TRANSFERENCIA" in operation_type:
         # Map generic transfers to Pix as it's the most common instant transfer method
         # and distinct from 'Debit Card' purchases.
-        return PaymentMethod.Pix
+        return TransactionMethod.Pix
 
     # 3. Fallbacks based on Type
     if t_type == "DEBIT":
-        return PaymentMethod.DebitCard
+        return TransactionMethod.DebitCard
 
     # Note: If type is CREDIT (Income) and no metadata/op_type matched,
     # it's likely a generic deposit/salary. 'Other' is safer than 'CreditCard'.
-    return PaymentMethod.Other
+    return TransactionMethod.Other
 
 
 def clean_description(description: str) -> str:
@@ -290,7 +318,7 @@ def clean_description(description: str) -> str:
     if not description:
         return ""
 
-    cleaned = description
+    cleaned = description.strip()
 
     # GENERIC CLEANING
     # 1. Pipe separator "Prefix | Name"
@@ -303,25 +331,233 @@ def clean_description(description: str) -> str:
 
     else:
         # 2. Common prefixes
-        prefix_pattern = r"(?i)^(compra (no|em) (débito|crédito|debito|credito)|pagamento( de| via)?|transferência|transf\.?|ted|doc|pix) (recebida|enviada|rec|env|de conta|títulos|titulos)?\s*[\|:\-]?\s*(.+)$"
-        match = re.match(prefix_pattern, description)
-        if match:
-            cleaned = match.group(match.lastindex).strip()
+        # Removed aggressive "Pagamento" or "Transferencia" stripping that often kills legitimate names or suffixes.
+        # Focusing on clear banking prefixes followed by separators or strictly defined patterns.
 
+        # Regex for strictly separating prefix from name (e.g. "PIX - Nome", "TED: Nome")
+        # Matches "Prefix SEPARATOR Name"
+        prefix_sep_pattern = (
+            r"(?i)^(pix|ted|doc|transfer[êe]ncia|pagamento)\s*[-:]\s*(.+)$"
+        )
+        match = re.match(prefix_sep_pattern, cleaned)
+        if match:
+            cleaned = match.group(2).strip()
         else:
-            # 3. Document number prefix
-            pattern_doc = r"^[\d\.\-\/]+\s+(.+)$"
-            match_doc = re.match(pattern_doc, description)
+            # 3. Document number prefix (Only if strictly digits/dots/slashes followed by SPACE and Letters)
+            # Avoids stripping "99 Taxi" (2 digits) but strips "123.456.789-00 Name"
+            # We enforce a minimum length for the numeric part to avoid stripping small numbers (like 99)
+            # Pattern: Start with at least 3 chars composed of digits/dots/dashes/slashes, followed by space, then content.
+            pattern_doc = r"^[\d\.\-\/]{3,}\s+(.+)$"
+            match_doc = re.match(pattern_doc, cleaned)
             if match_doc:
                 cleaned = match_doc.group(1).strip()
 
     # INSTALLMENT REMOVAL
     # Matches: Space + Digit/Digit at end (e.g. " Store 01/12", " Store 1/2")
-    # Does NOT remove letters (e.g. " Store D 1/2" -> " Store D")
     pattern_installment = r"\s+\d{1,2}/\d{1,2}$"
     cleaned = re.sub(pattern_installment, "", cleaned)
 
     return cleaned.strip()
+
+
+def _sync_transactions_for_single_account(
+    account: OpenFinanceAccount,
+    user_id: uuid.UUID,
+    item_id: uuid.UUID,
+    bank_id: uuid.UUID,
+    db: Session,
+    category_map: Dict[str, Any],
+    fallback_category: Any,
+):
+    """
+    Helper function to sync transactions for a single account.
+    """
+    logger.info(f"Buscando transações para a conta {account.name} ({account.id})")
+
+    # Fetch from Pluggy
+    transactions = client.get_transactions(account.pluggy_account_id)
+
+    for tx in transactions:
+        # --- 1. Category Mapping ---
+        pluggy_cat_id = tx.get("categoryId")
+        category = category_map.get(pluggy_cat_id)
+
+        if not category:
+            if fallback_category:
+                category = fallback_category
+            else:
+                logger.error(
+                    f"CRÍTICO: Nenhuma categoria encontrada para mapear {pluggy_cat_id}. Pulando transação."
+                )
+                continue
+
+        # --- 2. Merchant Mapping & Cleaning ---
+        merchant_data = tx.get("merchant") or {}
+        raw_merchant_name = merchant_data.get("businessName")
+
+        # If businessName is missing, fall back to description
+        if not raw_merchant_name:
+            raw_merchant_name = tx.get("description")
+
+        # Clean up the name
+        clean_name = clean_description(raw_merchant_name)
+
+        # Find or Create Merchant Alias / Merchant
+        # First, try to find by Alias pattern
+        alias = (
+            db.query(MerchantAlias)
+            .filter(
+                MerchantAlias.pattern == clean_name,
+                MerchantAlias.user_id == user_id,
+            )
+            .first()
+        )
+
+        merchant = None
+        if alias:
+            # Get associated merchant
+            merchant = alias.merchants[0] if alias.merchants else None
+
+        if not merchant:
+            # Check if merchant exists by name directly (Scoped to User)
+            merchant = (
+                db.query(Merchant)
+                .filter(Merchant.name == clean_name)
+                .filter(Merchant.user_id == user_id)
+                .first()
+            )
+
+        if not merchant:
+            # Create New Merchant and Alias safely
+            # Use a nested transaction (savepoint) to handle potential race conditions or constraints
+            try:
+                with db.begin_nested():
+                    # Create Alias first
+                    new_alias = MerchantAlias(
+                        id=uuid.uuid4(), user_id=user_id, pattern=clean_name
+                    )
+                    db.add(new_alias)
+                    db.flush()
+
+                    # Create Merchant
+                    merchant = Merchant(
+                        id=uuid.uuid4(),
+                        user_id=user_id,
+                        name=clean_name,
+                        merchant_alias_id=new_alias.id,
+                        category_id=category.id,  # Default category
+                    )
+                    db.add(merchant)
+                    db.flush()
+
+                    logger.info(f"Criado novo Merchant/Alias: {clean_name}")
+
+            except IntegrityError:
+                # If we hit a UniqueViolation (e.g. name exists), it means it was created concurrently
+                # or we missed it in the query. We try to fetch it again (User Scoped).
+                logger.warning(
+                    f"IntegrityError ao criar merchant {clean_name}. Tentando recuperar existente."
+                )
+                merchant = (
+                    db.query(Merchant)
+                    .filter(Merchant.name == clean_name)
+                    .filter(Merchant.user_id == user_id)
+                    .first()
+                )
+                if not merchant:
+                    logger.error(
+                        f"Falha crítica: Merchant {clean_name} não pôde ser criado nem recuperado."
+                    )
+                    continue
+            except Exception as e:
+                logger.error(f"Erro genérico ao criar merchant {clean_name}: {e}")
+                # We skip this transaction if we can't define a merchant
+                continue
+
+        # Check if payment already exists (Deduplication)
+        # We use a composite ID (PluggyID#ItemId) to allow the same transaction
+        # to appear in different Items (Connectors).
+        tx_composite_id = f"{tx['id']}#{item_id}"
+
+        existing_payment = (
+            db.query(Transaction)
+            .filter(Transaction.open_finance_id == tx_composite_id)
+            .first()
+        )
+
+        if existing_payment:
+            # Update existing payment to ensure clean title/merchant
+            if existing_payment.title != merchant.name:
+                existing_payment.title = merchant.name
+            if existing_payment.merchant_id != merchant.id:
+                existing_payment.merchant_id = merchant.id
+
+            # Optional: Update category if fallback was used previously but now we have better map?
+            # For now, focused on Merchant/Title cleaning.
+            continue
+
+        # --- 3. Create Payment ---
+        payment_method = _get_payment_method_from_transaction(tx)
+
+        # Date parsing
+        from datetime import datetime
+
+        try:
+            date_obj = datetime.strptime(tx["date"], "%Y-%m-%dT%H:%M:%S.%fZ").date()
+        except ValueError:
+            try:
+                date_obj = datetime.fromisoformat(
+                    tx["date"].replace("Z", "+00:00")
+                ).date()
+            except:
+                date_obj = datetime.now().date()
+
+        # Amount Handling (DEBIT vs CREDIT)
+        # Ensure DEBIT is negative, CREDIT is positive
+        amount = float(tx.get("amount", 0))
+        tx_type = tx.get("type", "").upper()
+
+        transaction_type = TransactionType.EXPENSE  # Default
+
+        if tx_type == "DEBIT":
+            amount = -abs(amount)
+            transaction_type = TransactionType.EXPENSE
+        elif tx_type == "CREDIT":
+            amount = abs(amount)
+            transaction_type = TransactionType.INCOME
+        else:
+            # Fallback default behavior
+            pass
+
+        try:
+            with db.begin_nested():
+                new_payment = Transaction(
+                    id=uuid.uuid4(),
+                    user_id=user_id,
+                    merchant_id=merchant.id,
+                    bank_id=bank_id,
+                    date=date_obj,
+                    title=merchant.name,  # Use clean merchant name as title
+                    description=tx.get("description"),
+                    amount=amount,
+                    type=transaction_type,
+                    open_finance_id=tx_composite_id,  # Use composite ID
+                    payment_method=payment_method,
+                    category_id=category.id,
+                )
+                db.add(new_payment)
+                db.flush()
+        except IntegrityError:
+            logger.warning(
+                f"Pagamento {tx['id']} já existe (race condition). Ignorando."
+            )
+            continue
+        except Exception as e:
+            logger.error(f"Erro ao salvar pagamento {tx['id']}: {e}")
+            continue
+
+    db.commit()
+    logger.info(f"Sincronização concluída para conta {account.name}")
 
 
 def sync_transactions_for_item(item_id: uuid.UUID, user_id: uuid.UUID, db: Session):
@@ -358,162 +594,84 @@ def sync_transactions_for_item(item_id: uuid.UUID, user_id: uuid.UUID, db: Sessi
             fallback_category = all_categories[0]
 
         for account in accounts:
-            logger.info(
-                f"Buscando transações para a conta {account.name} ({account.id})"
+            _sync_transactions_for_single_account(
+                account,
+                user_id,
+                item_id,
+                item.bank_id,
+                db,
+                category_map,
+                fallback_category,
             )
 
-            # Fetch from Pluggy
-            transactions = client.get_transactions(account.pluggy_account_id)
-
-            for tx in transactions:
-                # --- 1. Category Mapping ---
-                pluggy_cat_id = tx.get("categoryId")
-                category = category_map.get(pluggy_cat_id)
-
-                if not category:
-                    if fallback_category:
-                        category = fallback_category
-                    else:
-                        logger.error(
-                            f"CRÍTICO: Nenhuma categoria encontrada para mapear {pluggy_cat_id}. Pulando transação."
-                        )
-                        continue
-
-                # --- 2. Merchant Mapping & Cleaning ---
-                merchant_data = tx.get("merchant") or {}
-                raw_merchant_name = merchant_data.get("businessName")
-
-                # If businessName is missing, fall back to description
-                if not raw_merchant_name:
-                    raw_merchant_name = tx.get("description")
-
-                # Clean up the name
-                clean_name = clean_description(raw_merchant_name)
-
-                # Find or Create Merchant Alias / Merchant
-                alias = (
-                    db.query(MerchantAlias)
-                    .filter(
-                        MerchantAlias.pattern == clean_name,
-                        MerchantAlias.user_id == user_id,
-                    )
-                    .first()
-                )
-
-                merchant = None
-                if alias:
-                    # Get associated merchant
-                    merchant = alias.merchants[0] if alias.merchants else None
-
-                if not merchant:
-                    # Check if merchant exists by name directly (legacy compat)
-                    merchant = (
-                        db.query(Merchant)
-                        .filter(
-                            Merchant.name == clean_name, Merchant.user_id == user_id
-                        )
-                        .first()
-                    )
-
-                if not merchant:
-                    # Create New
-                    try:
-                        # Create Alias first
-                        new_alias = MerchantAlias(
-                            id=uuid.uuid4(), user_id=user_id, pattern=clean_name
-                        )
-                        db.add(new_alias)
-                        db.flush()  # Get ID
-
-                        # Create Merchant
-                        merchant = Merchant(
-                            id=uuid.uuid4(),
-                            user_id=user_id,
-                            name=clean_name,
-                            merchant_alias_id=new_alias.id,
-                            category_id=category.id,  # Default category for this merchant
-                        )
-                        db.add(merchant)
-                        db.flush()
-                        logger.info(f"Criado novo Merchant/Alias: {clean_name}")
-
-                    except Exception as e:
-                        logger.error(f"Erro ao criar merchant {clean_name}: {e}")
-                        db.rollback()
-                        continue
-
-                # Check if payment already exists (Deduplication)
-                existing_payment = (
-                    db.query(Payment)
-                    .filter(Payment.open_finance_id == tx["id"])
-                    .first()
-                )
-
-                if existing_payment:
-                    # Update existing payment to ensure clean title/merchant
-                    if existing_payment.title != merchant.name:
-                        existing_payment.title = merchant.name
-                    if existing_payment.merchant_id != merchant.id:
-                        existing_payment.merchant_id = merchant.id
-
-                    # Optional: Update category if fallback was used previously but now we have better map?
-                    # For now, focused on Merchant/Title cleaning.
-                    continue
-
-                # --- 3. Create Payment ---
-                payment_method = _get_payment_method_from_transaction(tx)
-
-                # Date parsing
-                from datetime import datetime
-
-                try:
-                    date_obj = datetime.strptime(
-                        tx["date"], "%Y-%m-%dT%H:%M:%S.%fZ"
-                    ).date()
-                except ValueError:
-                    try:
-                        date_obj = datetime.fromisoformat(
-                            tx["date"].replace("Z", "+00:00")
-                        ).date()
-                    except:
-                        date_obj = datetime.now().date()
-
-                # Amount Handling (DEBIT vs CREDIT)
-                # Ensure DEBIT is negative, CREDIT is positive
-                amount = float(tx.get("amount", 0))
-                tx_type = tx.get("type", "").upper()
-
-                transaction_type = TransactionType.EXPENSE  # Default
-
-                if tx_type == "DEBIT":
-                    amount = -abs(amount)
-                    transaction_type = TransactionType.EXPENSE
-                elif tx_type == "CREDIT":
-                    amount = abs(amount)
-                    transaction_type = TransactionType.INCOME
-                else:
-                    # Fallback default behavior
-                    pass
-
-                new_payment = Payment(
-                    id=uuid.uuid4(),
-                    user_id=user_id,
-                    merchant_id=merchant.id,
-                    bank_id=item.bank_id,
-                    date=date_obj,
-                    title=merchant.name,  # Use clean merchant name as title
-                    description=tx.get("description"),
-                    amount=amount,
-                    type=transaction_type,
-                    open_finance_id=tx["id"],
-                    payment_method=payment_method,
-                    category_id=category.id,
-                )
-                db.add(new_payment)
-
-            db.commit()
-            logger.info(f"Sincronização concluída para conta {account.name}")
+        # Update Item Status to UPDATED
+        item.status = ItemStatus.UPDATED
+        db.commit()
 
     except Exception as e:
         logger.error(f"Erro no processo de sync_transactions_for_item: {e}")
         db.rollback()
+
+        # Update status to error state if applicable (in a new transaction)
+        try:
+            # Re-fetch item since rollback might have detached/expired it
+            item = (
+                db.query(OpenFinanceItem).filter(OpenFinanceItem.id == item_id).first()
+            )
+            if item:
+                if "LOGIN_REQUIRED" in str(e) or "401" in str(e):
+                    item.status = ItemStatus.LOGIN_ERROR
+                else:
+                    pass
+                db.commit()
+        except Exception as update_error:
+            logger.error(f"Erro ao atualizar status de erro do item: {update_error}")
+
+
+def sync_transactions_for_account(
+    account_id: uuid.UUID, user_id: uuid.UUID, db: Session
+):
+    """
+    Syncs transactions for a specific account.
+    """
+    logger.info(f"Iniciando sincronização para Conta {account_id}")
+
+    try:
+        account = (
+            db.query(OpenFinanceAccount)
+            .filter(OpenFinanceAccount.id == account_id)
+            .first()
+        )
+        if not account:
+            raise HTTPException(status_code=404, detail="Conta não encontrada")
+
+        item = (
+            db.query(OpenFinanceItem)
+            .filter(OpenFinanceItem.id == account.item_id)
+            .first()
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Item não encontrado")
+
+        # Pre-fetch categories for faster lookup
+        all_categories = db.query(Category).all()
+        category_map = {c.pluggy_id: c for c in all_categories if c.pluggy_id}
+
+        # Fallback category
+        fallback_category = next(
+            (c for c in all_categories if c.name == "Outros"), None
+        )
+        if not fallback_category and all_categories:
+            fallback_category = all_categories[0]
+
+        _sync_transactions_for_single_account(
+            account, user_id, item.id, item.bank_id, db, category_map, fallback_category
+        )
+
+        item.status = ItemStatus.UPDATED
+        db.commit()
+
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar conta {account_id}: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

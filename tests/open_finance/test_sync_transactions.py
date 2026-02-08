@@ -4,10 +4,10 @@ import uuid
 from src.open_finance import service
 from src.entities.open_finance_item import OpenFinanceItem, ItemStatus
 from src.entities.open_finance_account import OpenFinanceAccount, AccountType
-from src.entities.category import Category, CategoryType
+from src.entities.category import Category
 from src.entities.merchant import Merchant
 from src.entities.merchant_alias import MerchantAlias
-from src.entities.payment import Payment, PaymentMethod
+from src.entities.transaction import Transaction, TransactionMethod
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def mock_pluggy_client():
 
 
 @pytest.mark.asyncio
-async def test_sync_transactions_success(mock_db_session, mock_pluggy_client):
+def test_sync_transactions_success(mock_db_session, mock_pluggy_client):
     # Setup Data
     user_id = uuid.uuid4()
     item_id = uuid.uuid4()
@@ -53,7 +53,6 @@ async def test_sync_transactions_success(mock_db_session, mock_pluggy_client):
         name="Groceries",
         slug="groceries",
         color_hex="#000000",
-        type=CategoryType.EXPENSE,
     )
 
     # Mock DB Query Responses
@@ -74,14 +73,14 @@ async def test_sync_transactions_success(mock_db_session, mock_pluggy_client):
             m.filter.return_value.first.return_value = None
         elif model == Merchant:
             m.filter.return_value.first.return_value = None
-        elif model == Payment:
+        elif model == Transaction:
             m.filter.return_value.first.return_value = None
         return m
 
     mock_db_session.query.side_effect = side_effect_query
 
     # Mock Pluggy Responses
-    mock_pluggy_client.get_accounts = AsyncMock(
+    mock_pluggy_client.get_accounts = MagicMock(
         return_value=[
             {
                 "id": "acc-pluggy-123",
@@ -105,10 +104,10 @@ async def test_sync_transactions_success(mock_db_session, mock_pluggy_client):
             "merchant": {"businessName": "Extra Hipermercados"},
         }
     ]
-    mock_pluggy_client.get_transactions = AsyncMock(return_value=transaction_data)
+    mock_pluggy_client.get_transactions = MagicMock(return_value=transaction_data)
 
     # Execute
-    await service.sync_transactions_for_item(item_id, user_id, mock_db_session)
+    service.sync_transactions_for_item(item_id, user_id, mock_db_session)
 
     # Assertions
     # 1. Accounts synced
@@ -122,9 +121,9 @@ async def test_sync_transactions_success(mock_db_session, mock_pluggy_client):
 
     assert any(isinstance(obj, MerchantAlias) for obj in added_instances)
     assert any(isinstance(obj, Merchant) for obj in added_instances)
-    assert any(isinstance(obj, Payment) for obj in added_instances)
+    assert any(isinstance(obj, Transaction) for obj in added_instances)
 
-    payment = next(obj for obj in added_instances if isinstance(obj, Payment))
+    payment = next(obj for obj in added_instances if isinstance(obj, Transaction))
     assert payment.amount == 50.0
     assert payment.title == "Extra Hipermercados"
     assert payment.payment_method == PaymentMethod.DebitCard
