@@ -17,7 +17,7 @@ from ..exceptions.aliases import (
     MerchantAliasNotFoundError,
     MerchantNotBelongToAliasError,
 )
-from ..payments.service import update_payments_category_bulk
+from ..transactions.service import update_transactions_category_bulk
 import logging
 
 
@@ -48,7 +48,7 @@ def create_merchant_alias_group(
 
         # Batch update existing payments for these merchants if a category was selected
         if alias_group.category_id:
-            update_payments_category_bulk(
+            update_transactions_category_bulk(
                 db,
                 current_user.get_uuid(),
                 alias_group.merchant_ids,
@@ -130,23 +130,22 @@ def update_merchant_alias(
                 .first()
             )
             if existing:
-                raise MerchantAliasCreationError(
-                    f"Já existe um alias com o nome '{alias_update.pattern}'."
-                )
+                message = f"Já existe um alias com o nome '{alias_update.pattern}'."
+                logging.error(message)
+                raise MerchantAliasCreationError(message)
+
             alias.pattern = alias_update.pattern
 
     if alias_update.category_id is not None:
         alias.category_id = alias_update.category_id
-        # Also update all linked merchants?
-        # If the user sets a default category for the group, should existing merchants be updated?
-        # The prompt implies "administer", typically yes.
-        # But 'PaymentService' checks the Alias at runtime for NEW payments or when reprocessing.
-        # However, for EXISTING merchants in the table, they have 'category_id', 'expense_category_id', etc.
-        # The alias.category_id acts as a "Policy".
-        # If we update the alias policy, maybe we should propagate to merchants?
-        # Let's keep it simple: Update Alias. Merchants will use it next time they are processed or we can trigger bulk update.
-        # For now, just update alias. Use case: "from now on, this group is X".
-        pass
+
+        # Propagate category update to all linked merchants
+        db.query(Merchant).filter(
+            Merchant.merchant_alias_id == alias_id,
+            Merchant.user_id == current_user.get_uuid(),
+        ).update(
+            {Merchant.category_id: alias_update.category_id}, synchronize_session=False
+        )
 
     db.commit()
     db.refresh(alias)
@@ -159,7 +158,7 @@ def update_merchant_alias(
         # Let's ensure we get the IDs.
         merchant_ids = [m.id for m in alias.merchants]
         if merchant_ids:
-            update_payments_category_bulk(
+            update_transactions_category_bulk(
                 db, current_user.get_uuid(), merchant_ids, alias.category_id
             )
 
