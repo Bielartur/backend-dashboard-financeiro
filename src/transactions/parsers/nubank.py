@@ -2,17 +2,17 @@ from typing import List
 from uuid import UUID
 from fastapi import UploadFile
 from .base import BaseParser
-from src.payments.model import PaymentImportResponse
+from src.transactions.model import TransactionImportResponse
 from datetime import datetime
 from decimal import Decimal
 import re
 
 
-from src.entities.payment import PaymentMethod
+from src.entities.transaction import TransactionMethod
 
 
 class NubankParser(BaseParser):
-    async def parse_invoice(self, file: UploadFile) -> List[PaymentImportResponse]:
+    async def parse_invoice(self, file: UploadFile) -> List[TransactionImportResponse]:
         csv_reader = await self._read_csv(file)
 
         transactions = []
@@ -42,12 +42,12 @@ class NubankParser(BaseParser):
                     r"\s*-\s*Parcela\s+\d+/\d+", "", title, flags=re.IGNORECASE
                 )
                 if clean_title == "Pagamento recebido":
-                    payment_method = PaymentMethod.BillPayment
+                    payment_method = TransactionMethod.BillPayment
                 else:
-                    payment_method = PaymentMethod.CreditCard
+                    payment_method = TransactionMethod.CreditCard
 
                 transactions.append(
-                    PaymentImportResponse(
+                    TransactionImportResponse(
                         date=payment_date,
                         title=clean_title.strip(),  # Ensure no trailing whitespace
                         amount=amount,
@@ -61,7 +61,9 @@ class NubankParser(BaseParser):
 
         return transactions
 
-    async def parse_statement(self, file: UploadFile) -> List[PaymentImportResponse]:
+    async def parse_statement(
+        self, file: UploadFile
+    ) -> List[TransactionImportResponse]:
         csv_reader = await self._read_csv(file)
         transactions = []
 
@@ -87,7 +89,7 @@ class NubankParser(BaseParser):
                     except ValueError:
                         pass  # Keep None if not a valid UUID
 
-                payment_method = PaymentMethod.Other
+                payment_method = TransactionMethod.Other
 
                 # Regex mapping
                 if re.search(
@@ -95,7 +97,7 @@ class NubankParser(BaseParser):
                     description,
                     re.IGNORECASE,
                 ):
-                    payment_method = PaymentMethod.Pix
+                    payment_method = TransactionMethod.Pix
                 elif (
                     re.search(r"Compra no d.bito", description, re.IGNORECASE)
                     or re.search(r"Compra de criptomoedas", description, re.IGNORECASE)
@@ -103,13 +105,13 @@ class NubankParser(BaseParser):
                     or re.search(r"D.bito em conta", description, re.IGNORECASE)
                     or re.search(r"Recarga de celular", description, re.IGNORECASE)
                 ):
-                    payment_method = PaymentMethod.DebitCard
+                    payment_method = TransactionMethod.DebitCard
                 elif re.search(r"Pagamento de boleto", description, re.IGNORECASE):
-                    payment_method = PaymentMethod.Boleto
+                    payment_method = TransactionMethod.Boleto
                 elif re.search(r"Pagamento de fatura", description, re.IGNORECASE):
-                    payment_method = PaymentMethod.BillPayment
+                    payment_method = TransactionMethod.BillPayment
                 elif re.search(r"Resgate RDB", description, re.IGNORECASE):
-                    payment_method = PaymentMethod.InvestmentRedemption
+                    payment_method = TransactionMethod.InvestmentRedemption
 
                 # Fallback for "Transferência Recebida" without "pelo Pix" is already covered by the first regex
 
@@ -120,7 +122,7 @@ class NubankParser(BaseParser):
                         final_title = parts[1].strip()
 
                 transactions.append(
-                    PaymentImportResponse(
+                    TransactionImportResponse(
                         id=payment_id,
                         date=payment_date,
                         title=final_title,

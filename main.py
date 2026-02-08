@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.database.core import engine, Base
-from src.entities.payment import Payment  # Import models to register them
+from src.entities.transaction import Transaction  # Import models to register them
 from src.entities.category import Category  # Import models to register them
 from src.entities.user import User  # Import models to register them
 from src.entities.open_finance_item import OpenFinanceItem

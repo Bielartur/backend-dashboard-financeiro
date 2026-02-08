@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 from fastapi import UploadFile
 from datetime import date
 from decimal import Decimal
-from src.payments.parsers.nubank import NubankParser
-from src.entities.payment import PaymentMethod
+from src.transactions.parsers.nubank import NubankParser
+from src.entities.transaction import TransactionMethod
 
 
 @pytest.fixture

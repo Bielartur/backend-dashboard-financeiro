@@ -4,43 +4,45 @@ from uuid import UUID
 from enum import Enum
 from pydantic import Field, field_validator
 from src.schemas.base import CamelModel
-from src.entities.payment import Payment
+from src.entities.transaction import Transaction
 from decimal import Decimal
-from src.entities.payment import PaymentMethod
+from src.entities.transaction import TransactionMethod
 from src.categories.model import CategoryResponse
 from src.merchants.model import MerchantResponse
 from src.banks.model import BankResponse
+from src.entities.transaction import TransactionType
 
 
-class PaymentMethodSchema(CamelModel):
+class TransactionMethodSchema(CamelModel):
     value: str
     display_name: str
 
 
-class PaymentBase(CamelModel):
+class TransactionBase(CamelModel):
     title: str
     date: date
     amount: Decimal = Field(decimal_places=2, max_digits=10)
-    payment_method: Optional[PaymentMethod] = None
+    payment_method: Optional[TransactionMethod] = None
     bank_id: UUID
 
 
-class PaymentCreate(PaymentBase):
+class TransactionCreate(TransactionBase):
     id: Optional[UUID] = None
+    type: Optional[TransactionType] = None
     category_id: Optional[UUID] = None
     has_merchant: bool = True
 
 
-class PaymentUpdate(CamelModel):
+class TransactionUpdate(CamelModel):
     title: Optional[str] = None
     date: Optional[datetime] = None
     amount: Optional[Decimal] = Field(None, decimal_places=2, max_digits=10)
-    payment_method: Optional[PaymentMethod] = None
+    payment_method: Optional[TransactionMethod] = None
     bank_id: Optional[UUID] = None
     category_id: Optional[UUID] = None
 
 
-class PaymentResponse(PaymentBase):
+class TransactionResponse(TransactionBase):
     id: UUID
     user_id: UUID
     merchant_id: Optional[UUID] = None
@@ -48,13 +50,13 @@ class PaymentResponse(PaymentBase):
     merchant: Optional[MerchantResponse] = None
     bank: Optional[BankResponse] = None
     category: CategoryResponse
-    payment_method: PaymentMethodSchema
+    payment_method: TransactionMethodSchema
 
     @field_validator("payment_method", mode="before")
     @classmethod
     def convert_payment_method(cls, v):
-        if isinstance(v, PaymentMethod):
-            return PaymentMethodSchema(value=v.value, display_name=v.display_name)
+        if isinstance(v, TransactionMethod):
+            return TransactionMethodSchema(value=v.value, display_name=v.display_name)
         return v
 
 
@@ -68,7 +70,7 @@ class ImportType(str, Enum):
     BANK_STATEMENT = "statement"
 
 
-class PaymentImportResponse(CamelModel):
+class TransactionImportResponse(CamelModel):
     id: Optional[UUID] = None
     date: date
     title: str
@@ -76,7 +78,7 @@ class PaymentImportResponse(CamelModel):
     category: Optional[CategoryResponse] = None
     has_merchant: bool = True
     already_exists: bool = False
-    payment_method: Optional[PaymentMethodSchema] = None
+    payment_method: Optional[TransactionMethodSchema] = None
 
     @field_validator("payment_method", mode="before")
     @classmethod
@@ -88,12 +90,12 @@ class PaymentImportResponse(CamelModel):
         # Is it an ID string? (not expected for import response but possible)
         if isinstance(v, str):
             try:
-                v = PaymentMethod(v)
+                v = TransactionMethod(v)
             except ValueError:
                 return None
 
         # Convert Enum to Schema
-        if isinstance(v, PaymentMethod):
-            return PaymentMethodSchema(value=v.value, display_name=v.display_name)
+        if isinstance(v, TransactionMethod):
+            return TransactionMethodSchema(value=v.value, display_name=v.display_name)
 
         return v

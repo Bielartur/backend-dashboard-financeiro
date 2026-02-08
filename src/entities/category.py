@@ -1,4 +1,13 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, UniqueConstraint, Enum
+from sqlalchemy import (
+    Column,
+    String,
+    DateTime,
+    ForeignKey,
+    UniqueConstraint,
+    Enum,
+    text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 import enum
@@ -9,20 +18,29 @@ from ..database.core import Base
 class Category(Base):
     __tablename__ = "categories"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     pluggy_id = Column(String, nullable=True, unique=True)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
     name = Column(String, nullable=False, unique=False)
     slug = Column(String, nullable=False, unique=False)
     color_hex = Column(String, nullable=False)
     created_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     updated_at = Column(
         DateTime,
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
 
     def __repr__(self):
@@ -32,7 +50,12 @@ class Category(Base):
 class UserCategorySetting(Base):
     __tablename__ = "user_category_settings"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     category_id = Column(
         UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False
@@ -40,13 +63,17 @@ class UserCategorySetting(Base):
     alias = Column(String, nullable=True)
     color_hex = Column(String, nullable=False)
     created_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     updated_at = Column(
         DateTime,
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
 
     __table_args__ = (
