@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import List, Optional, Literal
 from src.schemas.base import CamelModel
-from src.entities.payment import TransactionType
+from src.entities.transaction import TransactionType
 
 
 class DashboardSummary(CamelModel):

@@ -6,7 +6,7 @@ from sqlalchemy import extract, func, select, desc, literal_column, distinct, an
 from sqlalchemy.sql.functions import coalesce
 from dateutil.relativedelta import relativedelta
 
-from src.entities.payment import Payment, TransactionType
+from src.entities.transaction import Transaction, TransactionType
 from src.entities.category import Category, UserCategorySetting
 from src.dashboard.model import (
     DashboardResponse,
@@ -15,6 +15,9 @@ from src.dashboard.model import (
     MonthlyData,
     CategoryMetric,
 )
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 # Local Helpers for Month Names
 MONTH_NAMES = {
@@ -55,6 +58,8 @@ EXCLUDED_CATEGORY_SLUGS = [
     "transferencia-entre-contas",
     "transferência-mesma-titularidade",
     "transferência-mesma-instituição",
+    "pagamento-de-cartao-de-credito",
+    "pagamento-de-cartão-de-crédito",
 ]
 
 INVESTMENT_SLUGS = [
@@ -89,17 +94,18 @@ def _get_date_range(db: Session, user_id: Any, year_mode: str) -> Tuple[date, da
     today = date.today()
     if year_mode == "last-12":
         # Strategy: "Last 12 months WITH DATA"
-        # Find the date of the most recent payment
-        latest_payment_date = (
-            db.query(func.max(Payment.date)).filter(Payment.user_id == user_id).scalar()
+        # Find the date of the most recent transaction
+        latest_transaction_date = (
+            db.query(func.max(Transaction.date))
+            .filter(Transaction.user_id == user_id)
+            .scalar()
         )
 
         # If we have data, anchor to that. If not, anchor to today.
-        anchor_date = latest_payment_date if latest_payment_date else today
+        anchor_date = latest_transaction_date if latest_transaction_date else today
 
         # End date: Last day of the anchor month
         # Start date: First day of the month, 11 months before anchor
-
         # Example: Anchor = Jan 15 2025.
         # End Window = Jan 31 2025 (or Feb 1 - 1 day)
         # Start Window = Feb 1 2024
@@ -122,78 +128,6 @@ def _get_date_range(db: Session, user_id: Any, year_mode: str) -> Tuple[date, da
     return start_date, end_date
 
 
-def _get_category_tree_cte(db: Session, user_id: Any):
-    """
-    Constructs a Recursive CTE to resolve the Root Category for every Category.
-    It incorporates UserCategorySetting to override Name (alias) and Color.
-
-    It builds top-down:
-    - Root: Categories with parent_id IS NULL (themselves are roots).
-    - Recursive: Children join with parents to inherit the Root ID.
-
-    Returns a SQLAlchemy Selectable (CTE) with columns:
-    - category_id: The ID of the specific category (child or root)
-    - root_id: The ID of its top-level parent
-    - root_name: Effective Name (User Alias OR Global Name) of the top-level parent
-    - root_slug: Slug of the top-level parent
-    - root_color: Effective Color (User Color OR Global Color) of the top-level parent
-    """
-
-    # Alias for User Settings to join with Root Categories
-    # We only care about settings for the ROOT category, as children inherit Root visuals.
-    # Logic:
-    # 1. Identify Root Categories.
-    # 2. Left Join Root Categories with UserCategorySetting.
-    # 3. Select coalesce(setting.alias, category.name) and coalesce(setting.color, category.color)
-
-    # Anchor Member: Top-level categories (Roots)
-    # They are their own root.
-
-    # Prepare the UserCategorySetting subquery or join condition
-    # Since we are inside a CTE definition, it's safer to join explicitly in the select.
-
-    anchor = (
-        select(
-            Category.id.label("category_id"),
-            Category.id.label("root_id"),
-            # Use Coalesce to pick User Setting if available, else Default
-            coalesce(UserCategorySetting.alias, Category.name).label("root_name"),
-            Category.slug.label("root_slug"),
-            coalesce(UserCategorySetting.color_hex, Category.color_hex).label(
-                "root_color"
-            ),
-        )
-        .outerjoin(
-            UserCategorySetting,
-            and_(
-                UserCategorySetting.category_id == Category.id,
-                UserCategorySetting.user_id == user_id,
-            ),
-        )
-        .where(Category.parent_id.is_(None))
-    )
-
-    cte = anchor.cte(name="category_tree", recursive=True)
-
-    # Recursive Member: Join children to the existing tree
-    # The child inherits the root_id, root_name, root_color from the parent row in the CTE.
-    # Note: Children DO NOT have their own settings override in this Logic.
-    # Visuals are inherited from the Root Category.
-    # If a Child Category has separate settings, we are ignoring them here to maintain "Root Grouping".
-    child = select(
-        Category.id.label("category_id"),
-        cte.c.root_id,
-        cte.c.root_name,
-        cte.c.root_slug,
-        cte.c.root_color,
-    ).join(cte, Category.parent_id == cte.c.category_id)
-
-    # Combine
-    category_tree = cte.union_all(child)
-
-    return category_tree
-
-
 def _get_global_summary(
     db: Session, user_id: Any, start_date: date, end_date: date
 ) -> DashboardSummary:
@@ -201,22 +135,19 @@ def _get_global_summary(
     Calculates total revenue and expenses, excluding transfers and investments.
     Investments are calculated separately as a net result.
     """
-    category_tree = _get_category_tree_cte(db, user_id)
-
     # Standard Revenue/Expenses (Excluding Investments & Transfers)
     # Group by Payment.type
+
     statement = (
-        select(Payment.type, func.sum(Payment.amount).label("total"))
-        .join(category_tree, Payment.category_id == category_tree.c.category_id)
+        select(Transaction.type, func.sum(Transaction.amount).label("total"))
+        .join(Category, Transaction.category_id == Category.id)
         .where(
-            Payment.user_id == user_id,
-            Payment.date >= start_date,
-            Payment.date <= end_date,
-            category_tree.c.root_slug.notin_(
-                EXCLUDED_CATEGORY_SLUGS + INVESTMENT_SLUGS
-            ),
+            Transaction.user_id == user_id,
+            Transaction.date >= start_date,
+            Transaction.date <= end_date,
+            Category.slug.notin_(EXCLUDED_CATEGORY_SLUGS + INVESTMENT_SLUGS),
         )
-        .group_by(Payment.type)
+        .group_by(Transaction.type)
     )
 
     results = db.execute(statement).all()
@@ -226,23 +157,26 @@ def _get_global_summary(
 
     for payment_type, total in results:
         total = (total or Decimal(0)).quantize(Decimal("0.01"))
+        result = (payment_type, total)
 
         if payment_type == TransactionType.INCOME:
+            logger.info(result)
             total_revenue += total
         elif payment_type == TransactionType.EXPENSE:
+            logger.info(result)
             total_expenses += total
 
     # Calculate Net Investment Result
     # Sum of ALL investment transactions (Income + Expense)
     # Income (Redemption) is positive, Expense (Application) is negative.
     inv_statement = (
-        select(func.sum(Payment.amount).label("net_total"))
-        .join(category_tree, Payment.category_id == category_tree.c.category_id)
+        select(func.sum(Transaction.amount).label("net_total"))
+        .join(Category, Transaction.category_id == Category.id)
         .where(
-            Payment.user_id == user_id,
-            Payment.date >= start_date,
-            Payment.date <= end_date,
-            category_tree.c.root_slug.in_(INVESTMENT_SLUGS),
+            Transaction.user_id == user_id,
+            Transaction.date >= start_date,
+            Transaction.date <= end_date,
+            Category.slug.in_(INVESTMENT_SLUGS),
         )
     )
 
@@ -268,32 +202,32 @@ def _get_global_summary(
 
 def _get_category_rolling_averages(db: Session, user_id: Any) -> Dict[str, Decimal]:
     """
-    Calculates the average monthly spending per ROOT category over the last 12 months.
+    Calculates the average monthly spending per category over the last 12 months.
     """
     today = date.today()
     start_date = today.replace(day=1) - relativedelta(months=11)
 
-    category_tree = _get_category_tree_cte(db, user_id)
-
     statement = (
         select(
-            category_tree.c.root_slug,
-            func.sum(Payment.amount).label("total"),
-            func.count(distinct(extract("month", Payment.date))).label("months_count"),
+            Category.slug.label("category_slug"),
+            func.sum(Transaction.amount).label("total"),
+            func.count(distinct(extract("month", Transaction.date))).label(
+                "months_count"
+            ),
         )
-        .join(category_tree, Payment.category_id == category_tree.c.category_id)
+        .join(Category, Transaction.category_id == Category.id)
         .where(
-            Payment.user_id == user_id,
-            Payment.date >= start_date,
-            category_tree.c.root_slug.notin_(EXCLUDED_CATEGORY_SLUGS),
+            Transaction.user_id == user_id,
+            Transaction.date >= start_date,
+            Category.slug.notin_(EXCLUDED_CATEGORY_SLUGS),
         )
-        .group_by(category_tree.c.root_slug)
+        .group_by(Category.slug)
     )
 
     results = db.execute(statement).all()
 
     return {
-        row.root_slug: (
+        row.category_slug: (
             (row.total / row.months_count).quantize(Decimal("0.01"))
             if row.months_count > 0
             else Decimal(0)
@@ -310,44 +244,53 @@ def _get_monthly_breakdown(
     averages_map: Dict[str, Decimal],
 ) -> List[MonthlyData]:
     """
-    Fetches monthly data grouped by (Month, ROOT Category, Payment Type).
+    Fetches monthly data grouped by (Month, Category, Payment Type).
     We group by Payment Type as well to correctly attribute Revenue/Expenses totals,
     then we merge them into the Category line item.
     """
 
-    category_tree = _get_category_tree_cte(db, user_id)
-
-    # Query: Year, Month, Root Category, Payment Type, Sum(Amount)
+    # Query: Year, Month, Category, Payment Type, Sum(Amount)
     statement = (
         select(
-            extract("year", Payment.date).label("year"),
-            extract("month", Payment.date).label("month"),
-            category_tree.c.root_id.label("category_id"),
-            category_tree.c.root_name.label("category_name"),
-            category_tree.c.root_slug.label("category_slug"),
-            category_tree.c.root_color.label("category_color"),
-            Payment.type.label("payment_type"),
-            func.sum(Payment.amount).label("total"),
+            extract("year", Transaction.date).label("year"),
+            extract("month", Transaction.date).label("month"),
+            Category.id.label("category_id"),
+            coalesce(UserCategorySetting.alias, Category.name).label("category_name"),
+            Category.slug.label("category_slug"),
+            coalesce(UserCategorySetting.color_hex, Category.color_hex).label(
+                "category_color"
+            ),
+            Transaction.type.label("payment_type"),
+            func.sum(Transaction.amount).label("total"),
         )
-        .join(category_tree, Payment.category_id == category_tree.c.category_id)
+        .join(Category, Transaction.category_id == Category.id)
+        .outerjoin(
+            UserCategorySetting,
+            and_(
+                UserCategorySetting.category_id == Category.id,
+                UserCategorySetting.user_id == user_id,
+            ),
+        )
         .where(
-            Payment.user_id == user_id,
-            Payment.date >= start_date,
-            Payment.date <= end_date,
-            category_tree.c.root_slug.notin_(EXCLUDED_CATEGORY_SLUGS),
+            Transaction.user_id == user_id,
+            Transaction.date >= start_date,
+            Transaction.date <= end_date,
+            Category.slug.notin_(EXCLUDED_CATEGORY_SLUGS),
         )
         .group_by(
-            extract("year", Payment.date),
-            extract("month", Payment.date),
-            category_tree.c.root_id,
-            category_tree.c.root_name,
-            category_tree.c.root_slug,
-            category_tree.c.root_color,
-            Payment.type,
+            extract("year", Transaction.date),
+            extract("month", Transaction.date),
+            Category.id,
+            Category.name,
+            Category.slug,
+            Category.color_hex,
+            UserCategorySetting.alias,
+            UserCategorySetting.color_hex,
+            Transaction.type,
         )
         .order_by(
-            extract("year", Payment.date),
-            extract("month", Payment.date),
+            extract("year", Transaction.date),
+            extract("month", Transaction.date),
         )
     )
 
@@ -457,8 +400,8 @@ def get_available_months(db: Session, user_id: Any) -> List[DashboardAvailableMo
     Returns a list of years where the user has payments, plus 'last-12'.
     """
     statement = (
-        select(distinct(extract("year", Payment.date)).label("year"))
-        .where(Payment.user_id == user_id)
+        select(distinct(extract("year", Transaction.date)).label("year"))
+        .where(Transaction.user_id == user_id)
         .order_by(desc("year"))
     )
 

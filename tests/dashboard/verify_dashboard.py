@@ -11,7 +11,7 @@ from src.entities.category import Category
 from src.entities.merchant import Merchant
 from src.entities.bank import Bank
 from src.entities.merchant_alias import MerchantAlias
-from src.entities.payment import TransactionType
+from src.entities.transaction import TransactionType
 
 
 def verify_dashboard():

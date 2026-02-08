@@ -4,7 +4,7 @@ from datetime import date
 from unittest.mock import MagicMock
 from src.dashboard.service import _get_monthly_breakdown
 from src.dashboard.model import MonthlyData, CategoryMetric
-from src.entities.category import CategoryType
+from src.entities.transaction import TransactionType
 
 
 # Mock Row object from sqlalchemy result
@@ -17,7 +17,7 @@ class MockRow:
         category_name,
         category_slug,
         category_color,
-        category_type,
+        payment_type,
         total,
     ):
         self.year = year
@@ -26,7 +26,7 @@ class MockRow:
         self.category_name = category_name
         self.category_slug = category_slug
         self.category_color = category_color
-        self.category_type = category_type
+        self.payment_type = payment_type
         self.total = total
 
 
@@ -58,7 +58,7 @@ def test_spending_status_logic():
             "Exp Below",
             "expense-below",
             "#000",
-            CategoryType.EXPENSE,
+            TransactionType.EXPENSE,
             Decimal("-50.00"),
         ),
         MockRow(
@@ -68,7 +68,7 @@ def test_spending_status_logic():
             "Exp Avg",
             "expense-avg",
             "#000",
-            CategoryType.EXPENSE,
+            TransactionType.EXPENSE,
             Decimal("-100.00"),
         ),
         MockRow(
@@ -78,7 +78,7 @@ def test_spending_status_logic():
             "Exp Above",
             "expense-above",
             "#000",
-            CategoryType.EXPENSE,
+            TransactionType.EXPENSE,
             Decimal("-150.00"),
         ),
         MockRow(
@@ -88,7 +88,7 @@ def test_spending_status_logic():
             "Inc Below",
             "income-below",
             "#000",
-            CategoryType.INCOME,
+            TransactionType.INCOME,
             Decimal("50.00"),
         ),
         MockRow(
@@ -98,7 +98,7 @@ def test_spending_status_logic():
             "Inc Avg",
             "income-avg",
             "#000",
-            CategoryType.INCOME,
+            TransactionType.INCOME,
             Decimal("100.00"),
         ),
         MockRow(
@@ -108,7 +108,7 @@ def test_spending_status_logic():
             "Inc Above",
             "income-above",
             "#000",
-            CategoryType.INCOME,
+            TransactionType.INCOME,
             Decimal("150.00"),
         ),
     ]
