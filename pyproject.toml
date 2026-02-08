@@ -23,6 +23,7 @@ dependencies = [
     "python-slugify>=8.0.4",
     "python-dateutil>=2.9.0.post0",
     "pluggy-sdk>=1.0.0.post53",
+    "cachetools>=6.2.6",
 ]
 
 [dependency-groups]

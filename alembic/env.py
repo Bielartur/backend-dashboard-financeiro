@@ -14,11 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Import all models
 from src.database.core import Base
 from src.entities.user import User
-from src.entities.payment import Payment
+from src.entities.transaction import Transaction
 from src.entities.category import Category
 from src.entities.bank import Bank
 from src.entities.merchant import Merchant
 from src.entities.merchant_alias import MerchantAlias
+from src.entities.open_finance_item import OpenFinanceItem
+from src.entities.open_finance_account import OpenFinanceAccount
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
