@@ -57,19 +57,9 @@ def sync_categories(db: Session):
         # Check if category exists
         category = db.query(Category).filter(Category.pluggy_id == pluggy_id).first()
 
-        # Determine type
-        # Heuristic: Pluggy Income usually starts with "01"
-        cat_type = (
-            CategoryType.INCOME if pluggy_id.startswith("01") else CategoryType.EXPENSE
-        )
-
-        # Use name as slug (simplified)
-        slug = name.lower().replace(" ", "-").replace("/", "-")
-
         if category:
             # Update existing
             category.name = name  # Keep name in sync
-            # category.type = cat_type # Keep type in sync?
         else:
             # Create new
             category = Category(
@@ -78,7 +68,6 @@ def sync_categories(db: Session):
                 name=name,
                 slug=slug,  # Note: this might duplicate if multiple cats have same name.
                 color_hex=get_random_color(),
-                type=cat_type,
             )
             db.add(category)
 

@@ -29,58 +29,55 @@ def sync_banks(db: Session):
         connector_id = connector.get("id")
         name = connector.get("name")
         image_url = connector.get("imageUrl")
-        primary_color = connector.get("primaryColor") or "#000000"
         institution_url = connector.get("institutionUrl")
+
+        # Colors
+        # Default to black if no color provided
+        color_hex = connector.get("primaryColor")
+        if color_hex and not color_hex.startswith("#"):
+            color_hex = f"#{color_hex}"
+
+        color_hex = color_hex or "#000000"
 
         if not connector_id or not name:
             continue
 
-        # Check by connector_id first (most stable)
+        # Filter: Only banks with TRANSACTIONS product
+        products = connector.get("products", [])
+        if "TRANSACTIONS" not in products:
+            continue
+
+        # 1. Try to find by Connector ID (Best match)
         bank = db.query(Bank).filter(Bank.connector_id == connector_id).first()
 
+        # 2. If not found by ID, try to find by Name (Legacy/Manual banks)
         if not bank:
-            # Try manual mapping for common banks (handling typos like 'Santader')
-            NAME_MAPPING = {
-                "Santander Business": "Santader",  # If typo exists in DB
-                "Santander": "Santader",
-                "Itaú": "Itaú",
-                "Nubank": "Nubank",
-                "Bradesco": "Bradesco",
-                "Inter": "Inter",
-                "PicPay": "PicPay",
-            }
-
-            # Check if the Pluggy name maps to a known local name
-            local_name = NAME_MAPPING.get(name) or name
-
-            bank = db.query(Bank).filter(Bank.name == local_name).first()
+            # Exact match first (case sensitive? usually names are standard)
+            bank = db.query(Bank).filter(Bank.name == name).first()
 
             if not bank:
-                # Try simple case-insensitive match
+                # Case-insensitive match to avoid "Nubank" vs "nubank" duplicates
                 bank = db.query(Bank).filter(Bank.name.ilike(name)).first()
 
-            if not bank:
-                # Try partial match for known major banks
-                if "itaú" in name.lower():
-                    bank = db.query(Bank).filter(Bank.name.ilike("%itaú%")).first()
-                elif "santander" in name.lower():
-                    bank = (
-                        db.query(Bank).filter(Bank.name.ilike("%santader%")).first()
-                    )  # Handle typo
+            # Note: Removed fuzzy partial matches (like '%itaú%') to avoid
+            # linking "Itaú Corretora" to "Itaú" incorrectly.
+            # We strictly trust ID or exact Name.
 
         # Slug generation
         slug = name.lower().replace(" ", "-").replace(".", "")
 
         if bank:
-            # Update existing
+            # Update existing bank with Pluggy data
             bank.connector_id = connector_id
-            bank.name = name  # Keep verified name
+            bank.name = name
+            bank.is_active = True  # Re-activate if it was found in Pluggy
             if image_url:
                 bank.logo_url = image_url
-            if primary_color:
-                bank.color_hex = primary_color
+
+            # Update colors
+            bank.color_hex = color_hex
         else:
-            # Create new
+            # Create new Bank
             bank = Bank(
                 id=uuid4(),
                 connector_id=connector_id,
@@ -88,9 +85,10 @@ def sync_banks(db: Session):
                 slug=slug,
                 is_active=True,
                 logo_url=image_url or "",
-                color_hex=primary_color,
+                color_hex=color_hex,
             )
             db.add(bank)
+            db.flush()  # Ensure subsequent iterations see this new bank (prevent dup name)
 
     try:
         db.commit()
@@ -98,9 +96,9 @@ def sync_banks(db: Session):
     except IntegrityError as e:
         db.rollback()
         logger.error(
-            f"Erro de integridade do banco de dados durante a sincronização de bancos: {e}"
+            f"Erro de integridade durante sync_banks (possível duplicidade de nome não tratada): {e}"
         )
     except Exception as e:
         db.rollback()
-        logger.error(f"Erro inesperado durante a sincronização de bancos: {e}")
+        logger.error(f"Erro inesperado durante sync_banks: {e}")
         raise e

@@ -13,11 +13,22 @@ class CreateItemRequest(CamelModel):
     connector_id: int
 
 
+class AccountSummary(CamelModel):
+    id: str
+    name: str
+    number: Optional[str] = None
+    type: str
+    balance: float
+
+
 class ItemResponse(CamelModel):
     id: str
     pluggy_item_id: str
     bank_name: str
     status: str
+    logo_url: Optional[str] = None
+    color_hex: Optional[str] = None
+    accounts: List[AccountSummary] = []
 
 
 class ConnectTokenResponse(CamelModel):

@@ -5,7 +5,7 @@ from uuid import UUID
 from ..database.core import DbSession
 from . import model
 from . import service
-from ..auth.service import get_current_user
+from ..auth.service import get_current_user, CurrentAdmin
 from ..auth.model import TokenData
 
 router = APIRouter(prefix="/banks", tags=["Banks"])
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/banks", tags=["Banks"])
 async def create_bank(
     db: DbSession,
     bank: model.BankCreate,
-    current_user: TokenData = Depends(get_current_user),
+    current_user: CurrentAdmin,
 ):
     return service.create_bank(current_user, db, bank)
 
@@ -39,13 +39,11 @@ async def update_bank(
     db: DbSession,
     bank_id: UUID,
     bank_update: model.BankUpdate,
-    current_user: TokenData = Depends(get_current_user),
+    current_user: CurrentAdmin,
 ):
     return service.update_bank(current_user, db, bank_id, bank_update)
 
 
 @router.delete("/{bank_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_bank(
-    db: DbSession, bank_id: UUID, current_user: TokenData = Depends(get_current_user)
-):
+async def delete_bank(db: DbSession, bank_id: UUID, current_user: CurrentAdmin):
     return service.delete_bank(current_user, db, bank_id)

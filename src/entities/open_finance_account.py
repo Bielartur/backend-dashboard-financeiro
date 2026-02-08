@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Float, Enum
+from sqlalchemy import Column, String, DateTime, ForeignKey, Float, Enum, text, func
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 import enum
@@ -19,7 +19,12 @@ class AccountType(enum.Enum):
 class OpenFinanceAccount(Base):
     __tablename__ = "open_finance_accounts"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     item_id = Column(
         UUID(as_uuid=True),
         ForeignKey("open_finance_items.id"),
@@ -35,20 +40,26 @@ class OpenFinanceAccount(Base):
     )
     subtype = Column(String, nullable=True)  # CHECKING_ACCOUNT, CREDIT_CARD, etc.
     number = Column(String, nullable=True)
-    balance = Column(Float, nullable=True, default=0.0)
-    currency_code = Column(String, nullable=True, default="BRL")
+    balance = Column(Float, nullable=True, default=0.0, server_default=text("0.0"))
+    currency_code = Column(
+        String, nullable=True, default="BRL", server_default=text("'BRL'")
+    )
 
     # Relationships
     item = relationship("OpenFinanceItem", back_populates="accounts")
 
     created_at = Column(
-        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
     updated_at = Column(
         DateTime,
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
 
     def __repr__(self):
