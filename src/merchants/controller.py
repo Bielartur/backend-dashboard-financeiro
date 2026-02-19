@@ -21,14 +21,14 @@ async def create_merchant(
     merchant: model.MerchantCreate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.create_merchant(current_user, db, merchant)
+    return await service.create_merchant(current_user, db, merchant)
 
 
 @router.get("/", response_model=List[model.MerchantResponse])
 async def get_merchants(
     db: DbSession, current_user: TokenData = Depends(get_current_user)
 ):
-    return service.get_merchants(current_user, db)
+    return await service.get_merchants(current_user, db)
 
 
 @router.get("/search", response_model=List[model.MerchantResponse])
@@ -38,7 +38,7 @@ async def search_merchants(
     limit: int = 12,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.search_merchants(current_user, db, query, limit)
+    return await service.search_merchants(current_user, db, query, limit)
 
 
 @router.get("/{merchant_id}", response_model=model.MerchantResponse)
@@ -47,7 +47,7 @@ async def get_merchant(
     merchant_id: UUID,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.get_merchant_by_id(current_user, db, merchant_id)
+    return await service.get_merchant_by_id(current_user, db, merchant_id)
 
 
 @router.put("/{merchant_id}", response_model=model.MerchantResponse)
@@ -57,7 +57,7 @@ async def update_merchant(
     merchant_update: model.MerchantUpdate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.update_merchant(current_user, db, merchant_id, merchant_update)
+    return await service.update_merchant(current_user, db, merchant_id, merchant_update)
 
 
 @router.delete("/{merchant_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -66,4 +66,4 @@ async def delete_merchant(
     merchant_id: UUID,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.delete_merchant(current_user, db, merchant_id)
+    return await service.delete_merchant(current_user, db, merchant_id)

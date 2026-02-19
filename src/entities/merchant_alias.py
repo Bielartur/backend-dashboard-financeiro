@@ -1,4 +1,13 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, text, func
+from sqlalchemy import (
+    Column,
+    String,
+    DateTime,
+    ForeignKey,
+    text,
+    func,
+    UniqueConstraint,
+    Boolean,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
@@ -13,6 +22,9 @@ class MerchantAlias(Base):
     """
 
     __tablename__ = "merchant_aliases"
+    __table_args__ = (
+        UniqueConstraint("user_id", "pattern", name="uq_merchant_alias_user_pattern"),
+    )
 
     id = Column(
         UUID(as_uuid=True),
@@ -24,20 +36,24 @@ class MerchantAlias(Base):
     pattern = Column(String, nullable=False)  # Ex: "Uber"
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
     created_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+    is_investment = Column(Boolean, nullable=False, default=False)
+    ignored = Column(Boolean, nullable=False, default=False)
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
 
-    merchants = relationship("Merchant", back_populates="merchant_alias")
+    merchants = relationship(
+        "Merchant", back_populates="merchant_alias", lazy="selectin"
+    )
 
     @property
     def merchant_ids(self):

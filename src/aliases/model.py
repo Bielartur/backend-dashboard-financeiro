@@ -9,16 +9,20 @@ class MerchantAliasBase(CamelModel):
     pattern: str
     merchant_ids: List[UUID]
     category_id: Optional[UUID] = None
+    is_investment: bool = False
+    ignored: bool = False
 
 
 class MerchantAliasCreate(MerchantAliasBase):
-    pass
+    merchant_ids: Optional[List[UUID]] = []
 
 
 class MerchantAliasUpdate(CamelModel):
     pattern: Optional[str] = None
     merchant_ids: Optional[List[UUID]] = None
     category_id: Optional[UUID] = None
+    is_investment: Optional[bool] = None
+    ignored: Optional[bool] = None
 
 
 class MerchantAliasMerge(CamelModel):

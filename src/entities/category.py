@@ -7,6 +7,7 @@ from sqlalchemy import (
     Enum,
     text,
     func,
+    Boolean,
 )
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
@@ -30,13 +31,15 @@ class Category(Base):
     slug = Column(String, nullable=False, unique=False)
     color_hex = Column(String, nullable=False)
     created_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+    is_investment = Column(Boolean, nullable=False, default=False)
+    ignored = Column(Boolean, nullable=False, default=False)
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -63,18 +66,20 @@ class UserCategorySetting(Base):
     alias = Column(String, nullable=True)
     color_hex = Column(String, nullable=False)
     created_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
+    is_investment = Column(Boolean, nullable=True, default=None)
+    ignored = Column(Boolean, nullable=True, default=None)
 
     __table_args__ = (
         UniqueConstraint("user_id", "category_id", name="uq_user_category"),

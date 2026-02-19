@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from uuid import uuid4, UUID
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from psycopg2.errors import UniqueViolation
 from . import model
@@ -15,15 +17,47 @@ from ..exceptions.merchants import (
 import logging
 
 
-def create_merchant(
-    current_user: TokenData, db: Session, merchant: model.MerchantCreate
+async def create_merchant(
+    current_user: TokenData, db: AsyncSession, merchant: model.MerchantCreate
 ) -> Merchant:
     try:
+        # Create merchant instance
         new_merchant = Merchant(**merchant.model_dump())
         new_merchant.user_id = current_user.get_uuid()
+
+        # Logic to ensure proper Alias linking
+        # 1. Check if an alias with the same pattern (name) exists
+        if not new_merchant.merchant_alias_id:
+            query = select(MerchantAlias).filter(
+                MerchantAlias.pattern == new_merchant.name,
+                MerchantAlias.user_id == current_user.get_uuid(),
+            )
+            result = await db.execute(query)
+            existing_alias = result.scalars().first()
+
+            if existing_alias:
+                # Use existing alias
+                new_merchant.merchant_alias_id = existing_alias.id
+            else:
+                # Create a new alias with the same name
+                new_alias_id = uuid4()
+                new_alias = MerchantAlias(
+                    id=new_alias_id,
+                    pattern=new_merchant.name,
+                    user_id=current_user.get_uuid(),
+                    category_id=new_merchant.category_id,
+                )
+                db.add(new_alias)
+                # We need to flush inside to make sure we can reference it if needed,
+                # though SQLAlchemy unit of work usually handles it, explicit flush guarantees ID matching
+                # if we were using server-side generation, but we generate UUIDs here.
+                # However, for safety and preventing race conditions in complex flows:
+                await db.flush()
+                new_merchant.merchant_alias_id = new_alias_id
+
         db.add(new_merchant)
-        db.commit()
-        db.refresh(new_merchant)
+        await db.commit()
+        await db.refresh(new_merchant)
         logging.info(
             f"Novo merchant registrado: {new_merchant.name} pelo usuário {current_user.get_uuid()}"
         )
@@ -39,41 +73,45 @@ def create_merchant(
         raise MerchantCreationError(str(e.orig))
 
 
-def get_merchants(current_user: TokenData, db: Session) -> list[model.MerchantResponse]:
-    merchants = (
-        db.query(Merchant).filter(Merchant.user_id == current_user.get_uuid()).all()
+async def get_merchants(
+    current_user: TokenData, db: AsyncSession
+) -> list[model.MerchantResponse]:
+    result = await db.execute(
+        select(Merchant).filter(Merchant.user_id == current_user.get_uuid())
     )
+    merchants = result.scalars().all()
     logging.info(
         f"Recuperado todos os merchants pelo usuário {current_user.get_uuid()}"
     )
     return merchants
 
 
-def search_merchants(
-    current_user: TokenData, db: Session, query: str, limit: int = 12
+async def search_merchants(
+    current_user: TokenData, db: AsyncSession, query: str, limit: int = 12
 ) -> list[model.MerchantResponse]:
-    merchants = (
-        db.query(Merchant)
+    result = await db.execute(
+        select(Merchant)
         .filter(Merchant.user_id == current_user.get_uuid())
         .filter(Merchant.name.ilike(f"%{query}%"))
         .limit(limit)
-        .all()
     )
+    merchants = result.scalars().all()
     logging.info(
         f"Buscando merchants com query '{query}' pelo usuário {current_user.get_uuid()}"
     )
     return merchants
 
 
-def get_merchant_by_id(
-    current_user: TokenData, db: Session, merchant_id: UUID
+async def get_merchant_by_id(
+    current_user: TokenData, db: AsyncSession, merchant_id: UUID
 ) -> Merchant:
-    merchant = (
-        db.query(Merchant)
+    result = await db.execute(
+        select(Merchant)
         .filter(Merchant.id == merchant_id)
         .filter(Merchant.user_id == current_user.get_uuid())
-        .first()
     )
+    merchant = result.scalars().first()
+
     if not merchant:
         logging.warning(
             f"Merchant de ID {merchant_id} não encontrado pelo usuário {current_user.get_uuid()}"
@@ -85,27 +123,33 @@ def get_merchant_by_id(
     return merchant
 
 
-def update_merchant(
+async def update_merchant(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     merchant_id: UUID,
     merchant_update: model.MerchantUpdate,
 ) -> Merchant:
+    merchant = await get_merchant_by_id(current_user, db, merchant_id)
+
     merchant_data = merchant_update.model_dump(exclude_unset=True)
-    db.query(Merchant).filter(Merchant.id == merchant_id).filter(
-        Merchant.user_id == current_user.get_uuid()
-    ).update(merchant_data)
-    db.commit()
+    for key, value in merchant_data.items():
+        setattr(merchant, key, value)
+
+    await db.commit()
+    await db.refresh(merchant)
+
     logging.info(
         f"Merchant atualizado com sucesso pelo usuário {current_user.get_uuid()}"
     )
-    return get_merchant_by_id(current_user, db, merchant_id)
+    return merchant
 
 
-def delete_merchant(current_user: TokenData, db: Session, merchant_id: UUID) -> None:
-    merchant = get_merchant_by_id(current_user, db, merchant_id)
-    db.delete(merchant)
-    db.commit()
+async def delete_merchant(
+    current_user: TokenData, db: AsyncSession, merchant_id: UUID
+) -> None:
+    merchant = await get_merchant_by_id(current_user, db, merchant_id)
+    await db.delete(merchant)
+    await db.commit()
     logging.info(
         f"Merchant de ID {merchant_id} foi excluído pelo usuário {current_user.get_uuid()}"
     )

@@ -1,5 +1,6 @@
 from uuid import UUID
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 from psycopg2.errors import UniqueViolation
 from . import model
@@ -11,13 +12,15 @@ from slugify import slugify
 from ..auth.model import TokenData
 
 
-def create_bank(current_user: TokenData, db: Session, bank: model.BankCreate) -> Bank:
+async def create_bank(
+    current_user: TokenData, db: AsyncSession, bank: model.BankCreate
+) -> Bank:
     try:
         bank.slug = slugify(bank.name)
         new_bank = Bank(**bank.model_dump())
         db.add(new_bank)
-        db.commit()
-        db.refresh(new_bank)
+        await db.commit()
+        await db.refresh(new_bank)
         logging.info(
             f"Novo banco registrado: {new_bank.name} pelo usuário {current_user.get_uuid()}"
         )
@@ -29,14 +32,20 @@ def create_bank(current_user: TokenData, db: Session, bank: model.BankCreate) ->
         raise BankCreationError(str(e.orig))
 
 
-def get_banks(current_user: TokenData, db: Session) -> list[model.BankResponse]:
-    banks = db.query(Bank).all()
+async def get_banks(
+    current_user: TokenData, db: AsyncSession
+) -> list[model.BankResponse]:
+    result = await db.execute(select(Bank))
+    banks = result.scalars().all()
     logging.info(f"Recuperado todos os bancos pelo usuário {current_user.get_uuid()}")
     return banks
 
 
-def get_bank_by_id(current_user: TokenData, db: Session, bank_id: UUID) -> Bank:
-    bank = db.query(Bank).filter(Bank.id == bank_id).first()
+async def get_bank_by_id(
+    current_user: TokenData, db: AsyncSession, bank_id: UUID
+) -> Bank:
+    result = await db.execute(select(Bank).filter(Bank.id == bank_id))
+    bank = result.scalars().first()
     if not bank:
         logging.warning(
             f"Banco de ID {bank_id} não encontrado pelo usuário {current_user.get_uuid()}"
@@ -48,22 +57,30 @@ def get_bank_by_id(current_user: TokenData, db: Session, bank_id: UUID) -> Bank:
     return bank
 
 
-def update_bank(
-    current_user: TokenData, db: Session, bank_id: UUID, bank_update: model.BankUpdate
+async def update_bank(
+    current_user: TokenData,
+    db: AsyncSession,
+    bank_id: UUID,
+    bank_update: model.BankUpdate,
 ) -> Bank:
+    bank = await get_bank_by_id(current_user, db, bank_id)
+
     bank_data = bank_update.model_dump(exclude_unset=True)
     bank_data["slug"] = slugify(bank_update.name)
-    
-    db.query(Bank).filter(Bank.id == bank_id).update(bank_data)
-    db.commit()
+
+    for key, value in bank_data.items():
+        setattr(bank, key, value)
+
+    await db.commit()
+    await db.refresh(bank)
     logging.info(f"Banco atualizado com sucesso pelo usuário {current_user.get_uuid()}")
-    return get_bank_by_id(current_user, db, bank_id)
+    return bank
 
 
-def delete_bank(current_user: TokenData, db: Session, bank_id: UUID) -> None:
-    bank = get_bank_by_id(current_user, db, bank_id)
-    db.delete(bank)
-    db.commit()
+async def delete_bank(current_user: TokenData, db: AsyncSession, bank_id: UUID) -> None:
+    bank = await get_bank_by_id(current_user, db, bank_id)
+    await db.delete(bank)
+    await db.commit()
     logging.info(
         f"Banco de ID {bank_id} foi excluído pelo usuário {current_user.get_uuid()}"
     )

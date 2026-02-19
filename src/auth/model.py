@@ -1,5 +1,5 @@
 from uuid import UUID
-from pydantic import EmailStr, BaseModel
+from pydantic import EmailStr, BaseModel, field_validator
 from src.schemas.base import CamelModel
 from typing import List
 
@@ -17,7 +17,17 @@ class User(CamelModel):
     item_ids: List[UUID] = []
     first_name: str
     last_name: str
+    profile_image_url: str | None = None
     is_admin: bool
+
+    @field_validator("profile_image_url", mode="before")
+    @classmethod
+    def add_base_url(cls, v: str | None) -> str | None:
+        if v and v.startswith("/"):
+            from src.config import settings
+
+            return f"{settings.API_BASE_URL}{v}"
+        return v
 
 
 class Token(BaseModel):

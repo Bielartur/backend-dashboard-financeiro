@@ -9,6 +9,7 @@ from ..auth.service import get_current_user
 from ..auth.model import TokenData
 
 from ..schemas.pagination import PaginatedResponse
+from fastapi import Query
 
 router = APIRouter(prefix="/aliases", tags=["Merchant Aliases"])
 
@@ -17,12 +18,11 @@ router = APIRouter(prefix="/aliases", tags=["Merchant Aliases"])
 async def get_merchant_aliases(
     page: int = 1,
     size: int = 20,
-    db: DbSession = None,  # Fix: DbSession is usually not default None but Depends? Checking file... it was positional `db: DbSession`.
+    db: DbSession = None,
     current_user: TokenData = Depends(get_current_user),
+    scope: str = Query(default="general", pattern="^(general|investment|ignored|all)$"),
 ):
-    # Re-checking DbSession usage in original file.
-    # It was: db: DbSession, current_user: TokenData...
-    return service.get_merchant_aliases(current_user, db, page, size)
+    return await service.get_merchant_aliases(current_user, db, page, size, scope)
 
 
 @router.get("/search", response_model=PaginatedResponse[model.MerchantAliasResponse])
@@ -32,25 +32,28 @@ async def search_aliases(
     size: int = 20,
     db: DbSession = None,
     current_user: TokenData = Depends(get_current_user),
+    scope: str = Query(default="general", pattern="^(general|investment|ignored|all)$"),
 ):
-    return service.search_merchants_by_alias(current_user, db, query, page, size)
+    return await service.search_merchants_by_alias(
+        current_user, db, query, page, size, scope
+    )
 
 
 @router.get("/{alias_id}", response_model=model.MerchantAliasDetailResponse)
 async def get_merchant_alias(
     db: DbSession, alias_id: UUID, current_user: TokenData = Depends(get_current_user)
 ):
-    return service.get_alias_by_id(current_user, db, alias_id)
+    return await service.get_alias_by_id(current_user, db, alias_id)
 
 
 @router.put("/{alias_id}", response_model=model.MerchantAliasResponse)
-def update_merchant_alias(
+async def update_merchant_alias(
     db: DbSession,
     alias_id: UUID,
     alias_update: model.MerchantAliasUpdate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.update_merchant_alias(current_user, db, alias_id, alias_update)
+    return await service.update_merchant_alias(current_user, db, alias_id, alias_update)
 
 
 @router.post(
@@ -58,12 +61,12 @@ def update_merchant_alias(
     response_model=model.MerchantAliasResponse,
     status_code=status.HTTP_200_OK,
 )
-def create_merchant_alias_group(
+async def create_merchant_alias_group(
     db: DbSession,
     alias_group: model.MerchantAliasCreate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.create_merchant_alias_group(current_user, db, alias_group)
+    return await service.create_merchant_alias_group(current_user, db, alias_group)
 
 
 @router.post(
@@ -77,7 +80,9 @@ async def append_merchant_to_alias(
     merchant_id: UUID,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.append_merchant_to_alias(current_user, db, alias_id, merchant_id)
+    return await service.append_merchant_to_alias(
+        current_user, db, alias_id, merchant_id
+    )
 
 
 @router.delete(
@@ -90,4 +95,6 @@ async def remove_merchant_from_alias(
     merchant_id: UUID,
     current_user: TokenData = Depends(get_current_user),
 ):
-    return service.remove_merchant_from_alias(current_user, db, alias_id, merchant_id)
+    return await service.remove_merchant_from_alias(
+        current_user, db, alias_id, merchant_id
+    )

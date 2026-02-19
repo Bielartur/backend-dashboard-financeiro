@@ -6,7 +6,8 @@ from passlib.context import CryptContext
 import jwt
 from jwt import PyJWTError, ExpiredSignatureError, InvalidTokenError
 from pydantic import EmailStr
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from src.entities.user import User
 from . import model
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
@@ -33,8 +34,9 @@ def get_password_hash(password: str) -> str:
     return bcrypt_context.hash(password)
 
 
-def authenticate_user(email: str, password: str, db: Session) -> User | bool:
-    user = db.query(User).filter(User.email == email).first()
+async def authenticate_user(email: str, password: str, db: AsyncSession) -> User | bool:
+    result = await db.execute(select(User).filter(User.email == email))
+    user = result.scalars().first()
     if not user or not verify_password(password, user.password_hash):
         logging.warning(f"Falha na autenticação para o email: {email}")
         return False
@@ -51,6 +53,7 @@ def create_access_token(
         "id": str(user_id),
         "type": "access",
         "exp": datetime.now(timezone.utc) + expires_delta,
+        "jti": str(uuid4()),
     }
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -65,6 +68,7 @@ def create_refresh_token(
         "id": str(user_id),
         "type": "refresh",
         "exp": datetime.now(timezone.utc) + expires_delta,
+        "jti": str(uuid4()),
     }
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -98,8 +102,8 @@ def verify_refresh_token(token: str) -> model.TokenData:
         raise AuthenticationError(message="Refresh token inválido")
 
 
-def register_user(
-    db: Session, register_user_request: model.RegisterUserRequest
+async def register_user(
+    db: AsyncSession, register_user_request: model.RegisterUserRequest
 ) -> User | None:
     try:
         is_admin = False
@@ -115,7 +119,7 @@ def register_user(
             is_admin=is_admin,
         )
         db.add(create_user_model)
-        db.commit()
+        await db.commit()
         return create_user_model
     except Exception as e:
         logging.error(
@@ -128,17 +132,18 @@ def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]) -> model.Tok
     return verify_token(token)
 
 
-def get_current_user_from_db(
-    token: Annotated[str, Depends(oauth2_bearer)], db: Session = Depends(get_db)
+async def get_current_user_from_db(
+    token: Annotated[str, Depends(oauth2_bearer)], db: AsyncSession = Depends(get_db)
 ) -> User:
     token_data = verify_token(token)
-    user = db.query(User).filter(User.id == token_data.get_uuid()).first()
+    result = await db.execute(select(User).filter(User.id == token_data.get_uuid()))
+    user = result.scalars().first()
     if not user:
         raise AuthenticationError(message="User not found")
     return user
 
 
-def get_current_admin(user: User = Depends(get_current_user_from_db)) -> User:
+async def get_current_admin(user: User = Depends(get_current_user_from_db)) -> User:
     if not user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -151,13 +156,13 @@ CurrentUser = Annotated[model.TokenData, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin)]
 
 
-def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm, db: Session
+async def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm, db: AsyncSession
 ) -> Tuple[model.Token, str]:
     """
     Returns (TokenResponse, refresh_token_string)
     """
-    user = authenticate_user(
+    user = await authenticate_user(
         email=form_data.username, password=form_data.password, db=db
     )
 
@@ -168,7 +173,7 @@ def login_for_access_token(
     # Super Admin Check
     if user.email == os.getenv("SUPER_ADMIN_EMAIL") and not user.is_admin:
         user.is_admin = True
-        db.commit()
+        await db.commit()
         logging.info(f"Usuário {user.email} promovido a Super Admin.")
 
     access_token = create_access_token(
@@ -184,7 +189,9 @@ def login_for_access_token(
     return token_response, refresh_token
 
 
-def refresh_access_token(refresh_token: str, db: Session) -> Tuple[model.Token, str]:
+async def refresh_access_token(
+    refresh_token: str, db: AsyncSession
+) -> Tuple[model.Token, str]:
     """
     Verifies refresh token, checks user, and rotates tokens.
     Returns (TokenResponse, new_refresh_token_string)
@@ -192,7 +199,8 @@ def refresh_access_token(refresh_token: str, db: Session) -> Tuple[model.Token, 
     token_data = verify_refresh_token(refresh_token)
 
     # Check if user exists (security check)
-    user = db.query(User).filter(User.id == token_data.get_uuid()).first()
+    result = await db.execute(select(User).filter(User.id == token_data.get_uuid()))
+    user = result.scalars().first()
     if not user:
         raise AuthenticationError(message="Usuário não encontrado")
 
