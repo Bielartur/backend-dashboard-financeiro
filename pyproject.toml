@@ -24,11 +24,22 @@ dependencies = [
     "python-dateutil>=2.9.0.post0",
     "pluggy-sdk>=1.0.0.post53",
     "cachetools>=6.2.6",
+    "asyncpg>=0.31.0",
 ]
 
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.128.0",
     "httpx>=0.28.1",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "sqlalchemy>=2.0.45",
 ]
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--cov=src --cov-report=html --cov-report=term-missing"
