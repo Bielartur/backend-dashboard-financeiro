@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 from uuid import uuid4, UUID
-from typing import List
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from typing import List, Optional
+from sqlalchemy import func, select, or_
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from psycopg2.errors import UniqueViolation
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from . import model
 from ..auth.model import TokenData
 from ..entities.transaction import Transaction
@@ -14,11 +14,12 @@ import logging
 from ..entities.category import Category, UserCategorySetting
 from slugify import slugify
 from ..utils.cache import category_descendants_cache, invalidate_category_cache
+from ..schemas.pagination import PaginatedResponse
 
 logger = logging.getLogger(__name__)
 
 
-def get_category_descendants(db: Session, category_id: UUID) -> List[UUID]:
+async def get_category_descendants(db: AsyncSession, category_id: UUID) -> List[UUID]:
     """
     Retorna uma lista com o ID da categoria fornecida e todos os IDs
     de suas subcategorias (recursivamente).
@@ -45,7 +46,9 @@ def get_category_descendants(db: Session, category_id: UUID) -> List[UUID]:
     )
 
     # Verificar se a categoria existe
-    category_exists = db.query(Category).filter(Category.id == category_id).first()
+    result = await db.execute(select(Category).filter(Category.id == category_id))
+    category_exists = result.scalars().first()
+
     if not category_exists:
         logger.warning(f"Categoria {category_id} não encontrada no banco de dados")
         # Retornar lista contendo apenas o ID fornecido para não quebrar a query
@@ -66,10 +69,11 @@ def get_category_descendants(db: Session, category_id: UUID) -> List[UUID]:
 
     # Executar query final
     statement = select(category_tree.c.category_id)
-    results = db.execute(statement).scalars().all()
+    results = await db.execute(statement)
+    descendant_ids = results.scalars().all()
 
     # Converter para lista de UUIDs
-    descendant_ids = list(results)
+    # descendant_ids already list from .all()
 
     logger.info(
         f"Categoria {category_id} ({category_exists.name}) possui {len(descendant_ids)} ID(s) no resultado (incluindo ela mesma)"
@@ -82,14 +86,14 @@ def get_category_descendants(db: Session, category_id: UUID) -> List[UUID]:
     return descendant_ids
 
 
-def create_category(
-    current_user: TokenData, db: Session, category: model.CategoryCreate
+async def create_category(
+    current_user: TokenData, db: AsyncSession, category: model.CategoryCreate
 ) -> Category:
     try:
         new_category = Category(**category.model_dump(), slug=slugify(category.name))
         db.add(new_category)
-        db.commit()
-        db.refresh(new_category)
+        await db.commit()
+        await db.refresh(new_category)
 
         # Invalidar cache após criar categoria
         invalidate_category_cache()
@@ -110,11 +114,33 @@ def create_category(
         raise CategoryCreationError(str(e.orig))
 
 
-def get_categories(
-    current_user: TokenData, db: Session
+async def get_categories(
+    current_user: TokenData, db: AsyncSession, view: str = "user"
 ) -> list[model.CategoryResponse]:
+    if view == "global":
+        # Global view: Raw category data, ignoring user settings
+        query = select(Category).order_by(Category.name)
+        result = await db.execute(query)
+        categories = result.scalars().all()
+
+        return [
+            model.CategoryResponse(
+                id=c.id,
+                name=c.name,
+                alias=None,  # / Global view has no alias
+                slug=c.slug,
+                color_hex=c.color_hex,
+                created_at=c.created_at,
+                updated_at=c.updated_at,
+                is_investment=c.is_investment,
+                ignored=c.ignored,
+            )
+            for c in categories
+        ]
+
+    # User view: Coalesce with user settings
     query = (
-        db.query(
+        select(
             Category.id,
             Category.name,
             UserCategorySetting.alias,
@@ -124,6 +150,12 @@ def get_categories(
             ),
             Category.created_at,
             Category.updated_at,
+            func.coalesce(
+                UserCategorySetting.is_investment, Category.is_investment
+            ).label("is_investment"),
+            func.coalesce(UserCategorySetting.ignored, Category.ignored).label(
+                "ignored"
+            ),
         )
         .outerjoin(
             UserCategorySetting,
@@ -134,18 +166,34 @@ def get_categories(
     )
 
     logging.info(
-        f"Recuperado todas as categorias pelo usuário {current_user.get_uuid()}"
+        f"Recuperado todas as categorias pelo usuário {current_user.get_uuid()} (view={view})"
     )
 
-    results = query.all()
-    return results
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Manually map rows to model.CategoryResponse since we are selecting specific fields/expressions
+    return [
+        model.CategoryResponse(
+            id=row.id,
+            name=row.name,
+            alias=row.alias,
+            slug=row.slug,
+            color_hex=row.color_hex,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            is_investment=row.is_investment,
+            ignored=row.ignored,
+        )
+        for row in rows
+    ]
 
 
-def get_category_by_id(
-    current_user: TokenData, db: Session, category_id: UUID
+async def get_category_by_id(
+    current_user: TokenData, db: AsyncSession, category_id: UUID
 ) -> model.CategoryResponse:
     query = (
-        db.query(
+        select(
             Category.id,
             Category.name,
             UserCategorySetting.alias,
@@ -155,6 +203,12 @@ def get_category_by_id(
             ),
             Category.created_at,
             Category.updated_at,
+            func.coalesce(
+                UserCategorySetting.is_investment, Category.is_investment
+            ).label("is_investment"),
+            func.coalesce(UserCategorySetting.ignored, Category.ignored).label(
+                "ignored"
+            ),
         )
         .outerjoin(
             UserCategorySetting,
@@ -164,7 +218,8 @@ def get_category_by_id(
         .filter(Category.id == category_id)
     )
 
-    category = query.first()
+    result = await db.execute(query)
+    category = result.first()
 
     if not category:
         logging.warning(
@@ -184,103 +239,182 @@ def get_category_by_id(
         color_hex=category.color_hex,
         created_at=category.created_at,
         updated_at=category.updated_at,
+        is_investment=category.is_investment,
+        ignored=category.ignored,
     )
 
 
-def update_category(
+async def update_category(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     category_id: UUID,
     category_update: model.CategoryUpdate,
 ) -> model.CategoryResponse:
     # First get original to verify existence
-    original_category = db.query(Category).filter(Category.id == category_id).first()
+    result = await db.execute(select(Category).filter(Category.id == category_id))
+    original_category = result.scalars().first()
+
     if not original_category:
         raise CategoryNotFoundError(category_id)
 
     category_data = category_update.model_dump(exclude_unset=True)
 
-    db.query(Category).filter(Category.id == category_id).update(category_data)
-    db.commit()
+    # Use existing object update
+    for key, value in category_data.items():
+        setattr(original_category, key, value)
+
+    await db.commit()
 
     # Invalidar cache após atualizar categoria
     invalidate_category_cache()
 
-    return get_category_by_id(current_user, db, category_id)
+    return await get_category_by_id(current_user, db, category_id)
 
 
-def update_category_settings(
+async def update_category_settings(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     category_id: UUID,
     settings_update: model.CategorySettingsUpdate,
 ) -> model.CategoryResponse:
-    # Verify category exists
-    verify_exists = db.query(Category.id).filter(Category.id == category_id).first()
-    if not verify_exists:
+    # Verify category exists AND fetch global values to compare
+    result = await db.execute(select(Category).filter(Category.id == category_id))
+    category = result.scalars().first()
+
+    if not category:
         raise CategoryNotFoundError(category_id)
 
     user_id = current_user.get_uuid()
 
-    setting = (
-        db.query(UserCategorySetting)
-        .filter_by(user_id=user_id, category_id=category_id)
-        .first()
+    result = await db.execute(
+        select(UserCategorySetting).filter_by(user_id=user_id, category_id=category_id)
+    )
+    setting = result.scalars().first()
+
+    # Determine current effective values (to handle partial updates if needed, though usually strict replacement)
+    current_alias = setting.alias if setting else None
+    current_color = (
+        setting.color_hex if setting else category.color_hex
+    )  # Fallback to global if setting doesn't exist yet
+    current_invest = (
+        setting.is_investment
+        if setting and setting.is_investment is not None
+        else category.is_investment
+    )
+    current_ignored = (
+        setting.ignored if setting and setting.ignored is not None else category.ignored
     )
 
-    if setting:
-        if settings_update.color_hex is not None:
-            setting.color_hex = settings_update.color_hex
-        if settings_update.alias is not None:
-            # If alias is empty string, save as None
-            setting.alias = (
-                settings_update.alias if settings_update.alias.strip() != "" else None
+    # 1. Resolve Target Values
+    # Alias
+    new_alias = (
+        settings_update.alias if settings_update.alias is not None else current_alias
+    )
+    if new_alias is not None and new_alias.strip() == "":
+        new_alias = None
+
+    # Color (UserCategorySetting.color_hex is NOT NULL)
+    new_color = (
+        settings_update.color_hex
+        if settings_update.color_hex is not None
+        else current_color
+    )
+
+    # Investment
+    # If explicitly provided in update, use it. Else use current (which includes fallback logic above? No, update payload is intention).
+    # Actually, let's look at `settings_update`. If None, keep "current intention".
+    # But "current intention" might be "inherit" (None in DB).
+    # If DB is None, `current_invest` above became `category.is_investment`.
+
+    # Let's simplify:
+    # We want to know the USER'S INTENDED VALUE for each field.
+    # If user sends value -> Intention is that value.
+    # If user sends None -> Intention is "keep existing override" OR "keep inheriting"?
+    # If we assume PUT semantics (replace settings), then missing fields might mean "reset"?
+    # But standard practice here seems to be "partial update" or "merged update".
+    # I'll assume standard merge: if provided, update. If not, keep existing DB value (or lack thereof).
+
+    # Resolving `target_invest`
+    if settings_update.is_investment is not None:
+        target_invest = settings_update.is_investment
+    elif setting and setting.is_investment is not None:
+        target_invest = setting.is_investment
+    else:
+        target_invest = category.is_investment  # Default intention is global
+
+    # Resolving `target_ignored`
+    if settings_update.ignored is not None:
+        target_ignored = settings_update.ignored
+    elif setting and setting.ignored is not None:
+        target_ignored = setting.ignored
+    else:
+        target_ignored = category.ignored
+
+    # 2. Check Redundancy vs Global
+    matches_alias = new_alias is None
+    matches_color = new_color == category.color_hex
+    matches_invest = target_invest == category.is_investment
+    matches_ignored = target_ignored == category.ignored
+
+    is_fully_redundant = (
+        matches_alias and matches_color and matches_invest and matches_ignored
+    )
+
+    if is_fully_redundant:
+        if setting:
+            await db.delete(setting)
+            logging.info(
+                f"Removendo personalização redundante da categoria {category_id} para usuário {user_id}"
             )
     else:
-        # For new settings, use defaults if not provided (though model validation should handle required fields if any)
-        # But here alias is optional, color might be required by DB?
-        # Checking schema... UserCategorySetting.color_hex is NOT NULL.
-        # So if creating new setting, we MUST provide color.
-        # Check if color is in update, if not use existing category color?
+        # Prepare values for DB
+        # Nullable fields: store None if matches global (to allow inheritance if global changes later)
+        db_invest = None if matches_invest else target_invest
+        db_ignored = None if matches_ignored else target_ignored
 
-        # If color is missing in update, we fetch category default color
-        color_to_save = settings_update.color_hex
-        if not color_to_save:
-            cat_def = (
-                db.query(Category.color_hex).filter(Category.id == category_id).scalar()
+        # Non-nullable fields: MUST store value, even if matches global (e.g. color_hex)
+        # Because we need the record to exist (e.g. for Alias), checking DB schema again...
+        # "color_hex = Column(String, nullable=False)"
+        db_color = new_color  # Always store valid color
+
+        if setting:
+            setting.alias = new_alias
+            setting.color_hex = db_color
+            setting.is_investment = db_invest
+            setting.ignored = db_ignored
+        else:
+            setting = UserCategorySetting(
+                user_id=user_id,
+                category_id=category_id,
+                alias=new_alias,
+                color_hex=db_color,
+                is_investment=db_invest,
+                ignored=db_ignored,
             )
-            color_to_save = cat_def
+            db.add(setting)
 
-        setting = UserCategorySetting(
-            user_id=user_id,
-            category_id=category_id,
-            color_hex=color_to_save,
-            alias=settings_update.alias,
-        )
-        db.add(setting)
+    await db.commit()
 
-    db.commit()
-
-    logging.info(
-        f"Configurações da categoria {category_id} personalizadas pelo usuário {user_id}"
-    )
-
-    return get_category_by_id(current_user, db, category_id)
+    return await get_category_by_id(current_user, db, category_id)
 
 
-def delete_category(current_user: TokenData, db: Session, category_id: UUID) -> None:
+async def delete_category(
+    current_user: TokenData, db: AsyncSession, category_id: UUID
+) -> None:
     # This deletes the GLOBAL category.
     # User settings will cascade create deletion or become orphaned (depending on DB config),
     # but we should probably delete them too or rely on FK constraint.
     # Assuming FK constraint handles it or it's fine.
 
     # Just check exist + delete
-    category = db.query(Category).filter(Category.id == category_id).first()
+    result = await db.execute(select(Category).filter(Category.id == category_id))
+    category = result.scalars().first()
+
     if not category:
         raise CategoryNotFoundError(category_id)
 
-    db.delete(category)
-    db.commit()
+    await db.delete(category)
+    await db.commit()
 
     # Invalidar cache após deletar categoria
     invalidate_category_cache()
@@ -290,18 +424,15 @@ def delete_category(current_user: TokenData, db: Session, category_id: UUID) -> 
     )
 
 
-from ..schemas.pagination import PaginatedResponse
-from sqlalchemy import or_
-
-
-def search_categories(
+async def search_categories(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     query_str: str = "",
     page: int = 1,
     limit: int = 12,
+    scope: str = "general",
 ) -> PaginatedResponse[model.CategoryResponse]:
-    query = db.query(
+    query = select(
         Category.id,
         Category.name,
         UserCategorySetting.alias,
@@ -311,11 +442,39 @@ def search_categories(
         ),
         Category.created_at,
         Category.updated_at,
+        func.coalesce(UserCategorySetting.is_investment, Category.is_investment).label(
+            "is_investment"
+        ),
+        func.coalesce(UserCategorySetting.ignored, Category.ignored).label("ignored"),
     ).outerjoin(
         UserCategorySetting,
         (UserCategorySetting.category_id == Category.id)
         & (UserCategorySetting.user_id == current_user.get_uuid()),
     )
+
+    # Apply scope filters
+    # User settings take precedence over category defaults because of coalesce above,
+    # but for filtering we need to check the effective value.
+    # The effective value is exactly what the coalesce expressions above return.
+
+    # We can reuse the coalesce expressions for filtering
+    is_investment_expr = func.coalesce(
+        UserCategorySetting.is_investment, Category.is_investment
+    )
+    ignored_expr = func.coalesce(UserCategorySetting.ignored, Category.ignored)
+
+    if scope == "general":
+        # General = Not Investment AND Not Ignored
+        query = query.filter(is_investment_expr == False, ignored_expr == False)
+    elif scope == "investment":
+        query = query.filter(is_investment_expr == True)
+    elif scope == "ignored":
+        # Ignored tab shows ignored categories.
+        # Note: Ignored categories could technically be investments too, but usually they are mutually exclusive in UI intent.
+        # If something is both, where should it appear?
+        # "Ignored" usually takes precedence for "hiding", so they should appear in Ignored tab.
+        query = query.filter(ignored_expr == True)
+    # scope == "all" -> no filter
 
     if query_str:
         search_term = f"%{query_str}%"
@@ -330,12 +489,19 @@ def search_categories(
     query = query.order_by(Category.name)
 
     # Pagination logic
-    total = query.count()
+    # Estimate total count
+    # For async pagination, usually we run a separate count query
+    # Clone query for count
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar_one()
 
     limit = max(1, min(limit, 100))  # Clamp limit
     offset = (page - 1) * limit
 
-    items = query.offset(offset).limit(limit).all()
+    items_query = query.offset(offset).limit(limit)
+    result = await db.execute(items_query)
+    items = result.all()
 
     # Map to schema
     results = [
@@ -347,6 +513,8 @@ def search_categories(
             color_hex=row.color_hex,
             created_at=row.created_at,
             updated_at=row.updated_at,
+            is_investment=row.is_investment,
+            ignored=row.ignored,
         )
         for row in items
     ]

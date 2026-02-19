@@ -2,7 +2,9 @@ from datetime import datetime, timezone, date
 from uuid import uuid4, UUID
 from typing import Optional, List
 from decimal import Decimal
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import delete, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException, UploadFile
@@ -25,9 +27,9 @@ from logging import getLogger
 logger = getLogger(__name__)
 
 
-def bulk_create_transaction(
+async def bulk_create_transaction(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     transactions_data: List[model.TransactionCreate],
     import_type: Optional[model.ImportType] = None,
 ) -> List[Transaction]:
@@ -40,11 +42,12 @@ def bulk_create_transaction(
     existing_merchants_map = {}
 
     if titles_to_check:
-        merchants = (
-            db.query(Merchant)
-            .filter(Merchant.name.in_(titles_to_check), Merchant.user_id == user_id)
-            .all()
+        result = await db.execute(
+            select(Merchant).filter(
+                Merchant.name.in_(titles_to_check), Merchant.user_id == user_id
+            )
         )
+        merchants = result.scalars().all()
         existing_merchants_map = {m.name: m for m in merchants}
 
     transactions_dicts = []
@@ -115,7 +118,7 @@ def bulk_create_transaction(
 
             else:
                 # Caminho Lento: Verifica/Cria Merchant e Alias
-                processed_data = _process_transaction_merchant_and_category(
+                processed_data = await _process_transaction_merchant_and_category(
                     current_user, db, transaction_data
                 )
                 if "has_merchant" in processed_data:
@@ -154,9 +157,9 @@ def bulk_create_transaction(
 
         stmt = stmt.returning(Transaction)
 
-        result = db.scalars(stmt)
+        result = await db.scalars(stmt)
         created_transactions = result.all()
-        db.commit()
+        await db.commit()
 
         if len(created_transactions) < len(transactions_dicts):
             logger.warning(
@@ -166,11 +169,11 @@ def bulk_create_transaction(
         return created_transactions
 
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         import traceback
 
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         import traceback
 
         logger.error(f"Erro ao criar múltiplas transações: {str(e)}")
@@ -181,26 +184,26 @@ def bulk_create_transaction(
         raise TransactionCreationError(str(e))
 
 
-def _process_transaction_merchant_and_category(
-    current_user: TokenData, db: Session, transaction_data: model.TransactionCreate
+async def _process_transaction_merchant_and_category(
+    current_user: TokenData, db: AsyncSession, transaction_data: model.TransactionCreate
 ) -> dict:
     # Buscar ou criar merchant baseado no title exato e usuário
-    merchant = (
-        db.query(Merchant)
+    result = await db.execute(
+        select(Merchant)
         .filter(Merchant.name == transaction_data.title)
         .filter(Merchant.user_id == current_user.get_uuid())
-        .first()
     )
+    merchant = result.scalars().first()
 
     if not merchant:
         try:
-            with db.begin_nested():
+            async with db.begin_nested():
                 # Criar MerchantAlias primeiro (por padrão, mesmo nome do merchant)
                 merchant_alias = MerchantAlias(
                     user_id=current_user.get_uuid(), pattern=transaction_data.title
                 )
                 db.add(merchant_alias)
-                db.flush()  # Para obter o ID
+                await db.flush()  # Para obter o ID
 
                 # Criar Merchant linkado ao alias e ao usuário
                 merchant = Merchant(
@@ -210,7 +213,7 @@ def _process_transaction_merchant_and_category(
                     category_id=transaction_data.category_id,
                 )
                 db.add(merchant)
-                db.flush()
+                await db.flush()
                 logger.info(
                     f"Novo merchant e alias criados automaticamente: {merchant.name}"
                 )
@@ -219,12 +222,12 @@ def _process_transaction_merchant_and_category(
             logger.warning(
                 f"IntegrityError criando merchant '{transaction_data.title}'. Tentando buscar novamente."
             )
-            merchant = (
-                db.query(Merchant)
+            result = await db.execute(
+                select(Merchant)
                 .filter(Merchant.name == transaction_data.title)
                 .filter(Merchant.user_id == current_user.get_uuid())
-                .first()
             )
+            merchant = result.scalars().first()
             if not merchant:
                 # Should not happen if it was a UniqueViolation
                 raise
@@ -241,11 +244,10 @@ def _process_transaction_merchant_and_category(
     # Since we didn't eager load 'merchant_alias' in the query at line 198, let's fetch it if needed or assume we can rely on ID.
     alias_override_category_id = None
     if merchant.merchant_alias_id:
-        alias = (
-            db.query(MerchantAlias)
-            .filter(MerchantAlias.id == merchant.merchant_alias_id)
-            .first()
+        result = await db.execute(
+            select(MerchantAlias).filter(MerchantAlias.id == merchant.merchant_alias_id)
         )
+        alias = result.scalars().first()
         if alias and alias.category_id:
             alias_override_category_id = alias.category_id
             # logger.info(f"Alias overriding category: Using {alias.category_id} instead of Pluggy/Merchant defaults.")
@@ -300,27 +302,27 @@ def _process_transaction_merchant_and_category(
     }
 
 
-def create_transaction(
-    current_user: TokenData, db: Session, transaction: model.TransactionCreate
+async def create_transaction(
+    current_user: TokenData, db: AsyncSession, transaction: model.TransactionCreate
 ) -> Transaction:
     try:
-        processed_data = _process_transaction_merchant_and_category(
+        processed_data = await _process_transaction_merchant_and_category(
             current_user, db, transaction
         )
         new_transaction = Transaction(**processed_data)
 
         db.add(new_transaction)
-        db.commit()
-        db.refresh(new_transaction)
+        await db.commit()
+        await db.refresh(new_transaction)
         logger.info(
             f"Nova transação registrada para o usuário de ID: {current_user.get_uuid()}"
         )
         return new_transaction
     except TransactionCreationError:
-        db.rollback()
+        await db.rollback()
         raise
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error(
             f"Falha na criação de transação para o usuário de ID: {current_user.get_uuid()}: {str(e)}"
         )
@@ -330,9 +332,9 @@ def create_transaction(
 from ..schemas.pagination import PaginatedResponse
 
 
-def search_transactions(
+async def search_transactions(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     query: str,
     page: int = 1,
     limit: int = 12,
@@ -343,13 +345,18 @@ def search_transactions(
     end_date: Optional[date] = None,
     min_amount: Optional[Decimal] = None,
     max_amount: Optional[Decimal] = None,
+    merchant_alias_ids: Optional[List[UUID]] = None,
+    type: Optional[TransactionType] = None,
 ) -> PaginatedResponse[model.TransactionResponse]:
-    query_filter = db.query(Transaction).filter(
+    query_filter = select(Transaction).filter(
         Transaction.user_id == current_user.get_uuid()
     )
 
     if query:
         query_filter = query_filter.filter(Transaction.title.ilike(f"%{query}%"))
+
+    if type:
+        query_filter = query_filter.filter(Transaction.type == type)
 
     if payment_method:
         try:
@@ -379,16 +386,45 @@ def search_transactions(
     if max_amount is not None:
         query_filter = query_filter.filter(Transaction.amount <= max_amount)
 
+    # Filter by merchant_alias_ids: find all merchants that belong to these aliases
+    if merchant_alias_ids:
+        merchant_subquery = (
+            select(Merchant.id)
+            .filter(Merchant.merchant_alias_id.in_(merchant_alias_ids))
+            .scalar_subquery()
+        )
+        query_filter = query_filter.filter(
+            Transaction.merchant_id.in_(merchant_subquery)
+        )
+
     # Calculate total before pagination
-    total = query_filter.count()
+    # asyncpg requires executing a count query separately
+    # Optimization: count(1)
+    count_query = select(Transaction.id).filter(
+        query_filter.whereclause
+    )  # Copy filters
+    # We can't easily reuse query_filter for count if we act on it, so better to build it or assume we can execute a count func.
+    # Standard approach:
+    # total = await db.scalar(select(func.count()).select_from(query_filter.subquery()))
+    from sqlalchemy import func
+
+    # Correct way to count with filters
+    # Note: query_filter is a Select object
+    total_result = await db.execute(
+        select(func.count()).select_from(query_filter.subquery())
+    )
+    total = total_result.scalar_one()
 
     # Calculate offset
     offset = (page - 1) * limit
 
     # Apply pagination
-    transactions = (
-        query_filter.order_by(Transaction.date.desc()).offset(offset).limit(limit).all()
+    query_filter = (
+        query_filter.order_by(Transaction.date.desc()).offset(offset).limit(limit)
     )
+
+    result = await db.execute(query_filter)
+    transactions = result.scalars().all()
 
     logger.info(
         f"Buscando transações com filtros avançados para o usuário de ID: {current_user.get_uuid()} (Página {page})"
@@ -399,15 +435,16 @@ def search_transactions(
     )
 
 
-def get_transaction_by_id(
-    current_user: TokenData, db: Session, transaction_id: UUID
+async def get_transaction_by_id(
+    current_user: TokenData, db: AsyncSession, transaction_id: UUID
 ) -> Transaction:
-    transaction = (
-        db.query(Transaction)
+    result = await db.execute(
+        select(Transaction)
         .filter(Transaction.id == transaction_id)
         .filter(Transaction.user_id == current_user.get_uuid())
-        .first()
     )
+    transaction = result.scalars().first()
+
     if not transaction:
         logger.warning(
             f"Transação de ID {transaction_id} não encontrada para o usuário de ID {current_user.get_uuid()}"
@@ -419,14 +456,14 @@ def get_transaction_by_id(
     return transaction
 
 
-def update_transaction(
+async def update_transaction(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     transaction_id: UUID,
     transaction_update: model.TransactionUpdate,
 ) -> Transaction:
     # Fetch existing transaction to compare
-    current_transaction = get_transaction_by_id(current_user, db, transaction_id)
+    current_transaction = await get_transaction_by_id(current_user, db, transaction_id)
 
     transaction_data = transaction_update.model_dump(exclude_unset=True)
 
@@ -440,11 +477,14 @@ def update_transaction(
     if not changes:
         return current_transaction
 
-    db.query(Transaction).filter(Transaction.id == transaction_id).filter(
-        Transaction.user_id == current_user.get_uuid()
-    ).update(changes)
-    db.commit()
-    db.refresh(current_transaction)
+    await db.execute(
+        update(Transaction)
+        .where(Transaction.id == transaction_id)
+        .where(Transaction.user_id == current_user.get_uuid())
+        .values(changes)
+    )
+    await db.commit()
+    await db.refresh(current_transaction)
 
     logger.info(
         f"Transação atualizada com sucesso para o usuário de ID: {current_user.get_uuid()}"
@@ -452,12 +492,12 @@ def update_transaction(
     return current_transaction
 
 
-def delete_transaction(
-    current_user: TokenData, db: Session, transaction_id: UUID
+async def delete_transaction(
+    current_user: TokenData, db: AsyncSession, transaction_id: UUID
 ) -> None:
-    transaction = get_transaction_by_id(current_user, db, transaction_id)
-    db.delete(transaction)
-    db.commit()
+    transaction = await get_transaction_by_id(current_user, db, transaction_id)
+    await db.delete(transaction)
+    await db.commit()
     logger.info(
         f"Transação de ID {transaction_id} foi excluída pelo o usuário de ID {current_user.get_uuid()}"
     )
@@ -465,7 +505,7 @@ def delete_transaction(
 
 async def import_transactions_from_csv(
     current_user: TokenData,
-    db: Session,
+    db: AsyncSession,
     file: UploadFile,
     source: model.ImportSource,
     import_type: model.ImportType,
@@ -494,9 +534,12 @@ async def import_transactions_from_csv(
             # NUBANK -> nubank
             # ITAU -> itau-unibanco
 
-            bank_obj = db.query(Bank).filter(Bank.slug.ilike(f"%{bank_slug}%")).first()
+            result = await db.execute(
+                select(Bank).filter(Bank.slug.ilike(f"%{bank_slug}%"))
+            )
+            bank_obj = result.scalars().first()
 
-            query = db.query(Transaction).filter(
+            query = select(Transaction).filter(
                 Transaction.user_id == current_user.get_uuid(),
                 Transaction.date >= min_date,
                 Transaction.date <= max_date,
@@ -512,7 +555,8 @@ async def import_transactions_from_csv(
                     f"O banco '{bank_slug}' ainda não é suportado pelo sistema. Em breve ele estará disponível!"
                 )
 
-            existing_query = query.all()
+            result = await db.execute(query)
+            existing_query = result.scalars().all()
 
             # Create a set of signatures for O(1) lookup
             # Signature: (date, amount, title)
@@ -524,11 +568,10 @@ async def import_transactions_from_csv(
             existing_ids = set()
 
         # Pre-fetch system category for Credit Card Payment
-        credit_card_payment_category = (
-            db.query(Category)
-            .filter(Category.slug == "pagamento-de-cartão-de-crédito")
-            .first()
+        result = await db.execute(
+            select(Category).filter(Category.slug == "pagamento-de-cartão-de-crédito")
         )
+        credit_card_payment_category = result.scalars().first()
 
         if not credit_card_payment_category:
             credit_card_payment_category = Category(
@@ -537,13 +580,14 @@ async def import_transactions_from_csv(
                 color_hex="#64748b",  # Neutral slate color
             )
             db.add(credit_card_payment_category)
-            db.commit()
-            db.refresh(credit_card_payment_category)
+            await db.commit()
+            await db.refresh(credit_card_payment_category)
 
         # Pre-fetch system category for Investment
-        investment_category = (
-            db.query(Category).filter(Category.slug == "investimentos").first()
+        result = await db.execute(
+            select(Category).filter(Category.slug == "investimentos")
         )
+        investment_category = result.scalars().first()
 
         if not investment_category:
             investment_category = Category(
@@ -552,8 +596,8 @@ async def import_transactions_from_csv(
                 color_hex="#10b981",  # Emerald/Success color
             )
             db.add(investment_category)
-            db.commit()
-            db.refresh(investment_category)
+            await db.commit()
+            await db.refresh(investment_category)
 
     except Exception as e:
 
@@ -593,13 +637,14 @@ async def import_transactions_from_csv(
             transaction.has_merchant = True  # System category
 
         else:
-            result = (
-                db.query(Merchant, Category)
+            stmt = (
+                select(Merchant, Category)
                 .outerjoin(Category, Merchant.category_id == Category.id)
                 .filter(Merchant.name == transaction.title)
                 .filter(Merchant.user_id == current_user.get_uuid())
-                .first()
             )
+            result = await db.execute(stmt)
+            result = result.first()
 
         if result:
             merchant, category = result
@@ -669,8 +714,8 @@ async def import_transactions_from_csv(
     return enriched_transactions
 
 
-def update_transactions_category_bulk(
-    db: Session,
+async def update_transactions_category_bulk(
+    db: AsyncSession,
     user_id: UUID,
     merchant_ids: List[UUID],
     category_id: UUID | None,
@@ -683,15 +728,15 @@ def update_transactions_category_bulk(
         return 0
 
     stmt = (
-        model.Transaction.__table__.update()
-        .where(model.Transaction.user_id == user_id)
-        .where(model.Transaction.merchant_id.in_(merchant_ids))
+        update(Transaction)
+        .where(Transaction.user_id == user_id)
+        .where(Transaction.merchant_id.in_(merchant_ids))
         .values(category_id=category_id)
     )
 
-    result = db.execute(stmt)
+    result = await db.execute(stmt)
     updated_count = result.rowcount
-    db.commit()
+    await db.commit()
 
     logger.info(
         f"Bulk update: {updated_count} transações atualizadas para categoria {category_id} (Merchants: {len(merchant_ids)})"

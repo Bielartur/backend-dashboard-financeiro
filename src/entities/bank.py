@@ -34,13 +34,13 @@ class Bank(Base):
     logo_url = Column(URLType, nullable=False)
     color_hex = Column(String, nullable=False, default="#000000")
     created_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         server_default=func.now(),
     )
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),

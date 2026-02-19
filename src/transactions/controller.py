@@ -1,4 +1,4 @@
-from fastapi import UploadFile, File, APIRouter, status
+from fastapi import UploadFile, File, APIRouter, status, Query
 from typing import List, Optional
 from uuid import UUID
 from datetime import date
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/transactions", tags=["Transactions"])
 async def create_transaction(
     db: DbSession, transaction: model.TransactionCreate, current_user: CurrentUser
 ):
-    return service.create_transaction(current_user, db, transaction)
+    return await service.create_transaction(current_user, db, transaction)
 
 
 @router.post(
@@ -28,13 +28,15 @@ async def create_transaction(
     response_model=List[model.TransactionResponse],
     status_code=status.HTTP_201_CREATED,
 )
-def bulk_create_transaction(
+async def bulk_create_transaction(
     db: DbSession,
     transactions: List[model.TransactionCreate],
     current_user: CurrentUser,
     import_type: Optional[model.ImportType] = None,
 ):
-    return service.bulk_create_transaction(current_user, db, transactions, import_type)
+    return await service.bulk_create_transaction(
+        current_user, db, transactions, import_type
+    )
 
 
 @router.get("/search", response_model=PaginatedResponse[model.TransactionResponse])
@@ -51,8 +53,10 @@ async def search_transactions(
     end_date: Optional[date] = None,
     min_amount: Optional[Decimal] = None,
     max_amount: Optional[Decimal] = None,
+    merchant_alias_ids: Optional[List[UUID]] = Query(default=None),
+    type: Optional[model.TransactionType] = None,
 ):
-    return service.search_transactions(
+    return await service.search_transactions(
         current_user,
         db,
         query,
@@ -65,6 +69,8 @@ async def search_transactions(
         end_date,
         min_amount,
         max_amount,
+        merchant_alias_ids,
+        type,
     )
 
 
@@ -72,7 +78,7 @@ async def search_transactions(
 async def get_transaction(
     db: DbSession, transaction_id: UUID, current_user: CurrentUser
 ):
-    return service.get_transaction_by_id(current_user, db, transaction_id)
+    return await service.get_transaction_by_id(current_user, db, transaction_id)
 
 
 @router.put("/{transaction_id}", response_model=model.TransactionResponse)
@@ -82,7 +88,7 @@ async def update_transaction(
     transaction_update: model.TransactionUpdate,
     current_user: CurrentUser,
 ):
-    return service.update_transaction(
+    return await service.update_transaction(
         current_user, db, transaction_id, transaction_update
     )
 
@@ -91,7 +97,7 @@ async def update_transaction(
 async def delete_transaction(
     db: DbSession, transaction_id: UUID, current_user: CurrentUser
 ):
-    return service.delete_transaction(current_user, db, transaction_id)
+    return await service.delete_transaction(current_user, db, transaction_id)
 
 
 @router.post("/import/{source}", response_model=List[model.TransactionImportResponse])

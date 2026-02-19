@@ -18,15 +18,19 @@ class DashboardAvailableMonth(CamelModel):
     label: str
 
 
-class CategoryMetric(CamelModel):
+class DashboardMetric(CamelModel):
+    id: str  # UUID or Slug
     name: str
-    slug: str
+    description: Optional[str] = None
     color_hex: str
+    logo_url: Optional[str] = None
     type: TransactionType
     total: Decimal
-    average: Decimal
-    # Status: 'above_average', 'below_average', 'average'
-    status: Literal["above_average", "below_average", "average"]
+    average: Optional[Decimal] = Decimal(0)
+    # Status is mostly relevant for Categories, but we keep it for compatibility
+    status: Literal["above_average", "below_average", "average", "unknown"] = "unknown"
+    # IDs grouped into "Outros" (only populated for the Others metric)
+    grouped_ids: Optional[List[str]] = None
 
 
 class MonthlyData(CamelModel):
@@ -37,9 +41,11 @@ class MonthlyData(CamelModel):
     expenses: Decimal
     investments: Decimal = Decimal(0)
     balance: Decimal
-    categories: List[CategoryMetric]
+    # Generic metrics (could be categories, banks, or merchants)
+    metrics: List[DashboardMetric]
 
 
 class DashboardResponse(CamelModel):
     summary: DashboardSummary
     months: List[MonthlyData]
+

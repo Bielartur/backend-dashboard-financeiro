@@ -9,6 +9,7 @@ from ..rate_limiting import limiter
 from ..entities.user import User
 from ..exceptions.auth import AuthenticationError
 from logging import getLogger
+from sqlalchemy.future import select
 
 logger = getLogger(__name__)
 
@@ -64,7 +65,7 @@ async def get_refresh_token_from_cookie(request: Request) -> str:
 async def register_user(
     request: Request, db: DbSession, payload: model.RegisterUserRequest
 ):
-    return service.register_user(db, payload)
+    return await service.register_user(db, payload)
 
 
 @router.post("/login", response_model=model.Token)
@@ -74,12 +75,12 @@ async def login_for_access_token(
     db: DbSession,
 ):
     try:
-        token, refresh_token = service.login_for_access_token(form_data, db)
+        token, refresh_token = await service.login_for_access_token(form_data, db)
         set_refresh_cookie(response, refresh_token)
         logger.info(f"Login bem-sucedido para o usuário {form_data.username}.")
         return token
     except AuthenticationError as e:
-        logger.warning(f"Falha no login: {e.message}")
+        logger.warning(f"Falha no login: {e.detail}")
         clear_refresh_cookie(response)
         raise e
 
@@ -95,12 +96,14 @@ async def refresh_token(
     Gera novo access e rotate do refresh.
     """
     try:
-        new_token, new_refresh_token = service.refresh_access_token(refresh_token, db)
+        new_token, new_refresh_token = await service.refresh_access_token(
+            refresh_token, db
+        )
         set_refresh_cookie(response, new_refresh_token)
         logger.info("Token refresh bem-sucedido.")
         return new_token
     except AuthenticationError as e:
-        logger.warning(f"Falha no refresh de token: {e.message}")
+        logger.warning(f"Falha no refresh de token: {e.detail}")
         clear_refresh_cookie(response)
         raise e
 
@@ -114,7 +117,10 @@ async def get_current_user(
 
     from ..entities.open_finance_item import OpenFinanceItem
 
-    items = db.query(OpenFinanceItem).filter(OpenFinanceItem.user_id == user.id).all()
+    result = await db.execute(
+        select(OpenFinanceItem).filter(OpenFinanceItem.user_id == user.id)
+    )
+    items = result.scalars().all()
     item_ids = [item.id for item in items]
 
     return model.User(
@@ -122,6 +128,7 @@ async def get_current_user(
         email=user.email,
         first_name=user.first_name,
         last_name=user.last_name,
+        profile_image_url=user.profile_image_url,
         is_admin=user.is_admin,
         item_ids=item_ids,
     )

@@ -1,15 +1,14 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
 import asyncio
 import logging
 from typing import List
 
-from src.database.core import get_db
+from src.database.core import DbSession
 from . import service
 from .model import (
-    ConnectTokenResponse,
     ConnectTokenResponse,
     OpenFinanceTransaction,
     SyncResponse,
@@ -26,53 +25,44 @@ router = APIRouter(prefix="/open-finance", tags=["Open Finance"])
 @router.post("/items", response_model=ItemResponse)
 async def create_item(
     payload: CreateItemRequest,
-    db: Session = Depends(get_db),
+    db: DbSession,
     current_user: TokenData = Depends(get_current_user),
 ):
     """
     Saves a new Open Finance Item (Connection) after successful widget login.
     """
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, lambda: service.create_item(payload, current_user, db)
-    )
+    return await service.create_item(payload, current_user, db)
 
 
 @router.get("/items", response_model=List[ItemResponse])
 async def get_items(
-    db: Session = Depends(get_db),
+    db: DbSession,
     current_user: TokenData = Depends(get_current_user),
 ):
     """
     Retrieves all Open Finance Items for the current user.
     """
-    import uuid
-
     user_id = uuid.UUID(str(current_user.user_id))
-    user_id = uuid.UUID(str(current_user.user_id))
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, lambda: service.get_items_by_user(user_id, db)
-    )
+    return await service.get_items_by_user(user_id, db)
 
 
 @router.get("/connect-token", response_model=ConnectTokenResponse)
-async def get_connect_token(db: Session = Depends(get_db)):
+async def get_connect_token(db: DbSession):
     """
     Generates a Connect Token for the Pluggy Widget.
     """
+    # Service function is sync (external API only)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, service.create_connect_token)
 
 
 @router.get("/transactions", response_model=List[OpenFinanceTransaction])
-async def get_transactions(
-    item_id: str, connector_id: int, db: Session = Depends(get_db)
-):
+async def get_transactions(item_id: str, connector_id: int, db: DbSession):
     """
     Fetches raw transactions from Open Finance for a specific connection.
     Requires item_id (Pluggy Connection ID) and connector_id (Pluggy Connector/Bank ID).
     """
+    # Service function is sync (external API only)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None, lambda: service.get_transactions(item_id, connector_id)
@@ -80,9 +70,9 @@ async def get_transactions(
 
 
 @router.post("/items/{id}/sync", status_code=status.HTTP_200_OK)
-def sync_transactions(
+async def sync_transactions(
     id: str,
-    db: Session = Depends(get_db),
+    db: DbSession,
     current_user: TokenData = Depends(get_current_user),
 ):
     """
@@ -105,14 +95,8 @@ def sync_transactions(
             await asyncio.sleep(0.1)
 
             try:
-                # 2. Perform the potentially long running tasks
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: service.sync_transactions_for_item(
-                        item_uuid, user_uuid, db
-                    ),
-                )
+                # 2. Perform the async tasks
+                await service.sync_transactions_for_item(item_uuid, user_uuid, db)
 
                 # 3. Yield completion message
                 yield SyncProgressResponse(
@@ -128,15 +112,13 @@ def sync_transactions(
         return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
     except ValueError:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=400, detail="ID inválido")
 
 
 @router.post("/accounts/{id}/sync", status_code=status.HTTP_200_OK)
-def sync_account_transactions(
+async def sync_account_transactions(
     id: str,
-    db: Session = Depends(get_db),
+    db: DbSession,
     current_user: TokenData = Depends(get_current_user),
 ):
     """
@@ -158,14 +140,8 @@ def sync_account_transactions(
             await asyncio.sleep(0.1)
 
             try:
-                # 2. Perform the potentially long running tasks
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: service.sync_transactions_for_account(
-                        account_uuid, user_uuid, db
-                    ),
-                )
+                # 2. Perform the async tasks
+                await service.sync_transactions_for_account(account_uuid, user_uuid, db)
 
                 # 3. Yield completion message
                 yield SyncProgressResponse(
@@ -181,13 +157,11 @@ def sync_account_transactions(
         return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
     except ValueError:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=400, detail="ID inválido")
 
 
 @router.post("/sync", status_code=status.HTTP_200_OK, response_model=SyncResponse)
-async def sync_data(db: Session = Depends(get_db)):
+async def sync_data(db: DbSession):
     """
     Triggers synchronization of system data with Pluggy (Categories, Banks/Connectors).
     """

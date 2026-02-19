@@ -10,6 +10,8 @@ from pydantic import constr
 class CategoryBase(CamelModel):
     name: str
     color_hex: constr(pattern=r"^#[0-9A-Fa-f]{6}$")  # Validação de cor hex
+    is_investment: bool = False
+    ignored: bool = False
 
 
 class CategoryCreate(CategoryBase):
@@ -19,11 +21,15 @@ class CategoryCreate(CategoryBase):
 class CategoryUpdate(CategoryBase):
     name: Optional[str] = None
     color_hex: Optional[constr(pattern=r"^#[0-9A-Fa-f]{6}$")] = None
+    is_investment: Optional[bool] = None
+    ignored: Optional[bool] = None
 
 
 class CategorySettingsUpdate(CamelModel):
     alias: Optional[str] = None
     color_hex: Optional[constr(pattern=r"^#[0-9A-Fa-f]{6}$")] = None
+    is_investment: Optional[bool] = None
+    ignored: Optional[bool] = None
 
 
 class CategoryResponse(CategoryBase):

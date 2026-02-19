@@ -16,6 +16,7 @@ class User(Base):
     email = Column(String, unique=True, nullable=False)
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
+    profile_image_url = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False, server_default=text("false"))
     password_hash = Column(String, nullable=False)
 

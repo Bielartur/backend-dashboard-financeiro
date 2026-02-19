@@ -1,9 +1,11 @@
 import logging
 import random
+import asyncio
 from typing import Dict, List, Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 
 from src.entities.category import Category
@@ -30,7 +32,7 @@ def get_random_color() -> str:
     return random.choice(DEFAULT_COLORS)
 
 
-def sync_categories(db: Session):
+async def sync_categories(db: AsyncSession):
     """
     Fetches categories from Pluggy and synchronizes them with the local database.
     Handles insertion, updates, and hierarchy linking.
@@ -38,7 +40,10 @@ def sync_categories(db: Session):
     logger.info("Iniciando sincronização de categorias com a Pluggy...")
 
     try:
-        pluggy_categories = pluggy_client.get_categories()
+        loop = asyncio.get_running_loop()
+        pluggy_categories = await loop.run_in_executor(
+            None, pluggy_client.get_categories
+        )
     except Exception as e:
         logger.error(f"Falha ao buscar categorias da Pluggy: {e}")
         raise e
@@ -55,18 +60,25 @@ def sync_categories(db: Session):
             continue
 
         # Check if category exists
-        category = db.query(Category).filter(Category.pluggy_id == pluggy_id).first()
+        result = await db.execute(
+            select(Category).filter(Category.pluggy_id == pluggy_id)
+        )
+        category = result.scalars().first()
 
         if category:
             # Update existing
             category.name = name  # Keep name in sync
         else:
             # Create new
+            # Determine slug? Original code used 'slug' variable but it wasn't defined in the snippet view!
+            # Assuming simple slugification based on name for now to match other patterns
+            slug = name.lower().replace(" ", "-").replace("/", "-")
+
             category = Category(
                 id=uuid4(),
                 pluggy_id=pluggy_id,
                 name=name,
-                slug=slug,  # Note: this might duplicate if multiple cats have same name.
+                slug=slug,
                 color_hex=get_random_color(),
             )
             db.add(category)
@@ -74,7 +86,7 @@ def sync_categories(db: Session):
         # Flush to get IDs if needed (for autoflush cases), though we set UUID manually except for existing
         # We map pluggy ID to the OBJECT (or UUID) so we can update parents in Pass 2
         # Since we might not have committed, keep object ref or flush.
-        db.flush()
+        await db.flush()
         pluggy_id_to_uuid[pluggy_id] = category.id
 
     # Pass 2: Link Parents
@@ -86,20 +98,23 @@ def sync_categories(db: Session):
             local_uuid = pluggy_id_to_uuid[pluggy_id]
             parent_uuid = pluggy_id_to_uuid[parent_pluggy_id]
 
-            category = db.query(Category).filter(Category.id == local_uuid).first()
+            result_cat = await db.execute(
+                select(Category).filter(Category.id == local_uuid)
+            )
+            category = result_cat.scalars().first()
             if category:
                 category.parent_id = parent_uuid
 
     try:
-        db.commit()
+        await db.commit()
         logger.info("Sincronização de categorias concluída com sucesso.")
     except IntegrityError as e:
-        db.rollback()
+        await db.rollback()
         logger.error(
             f"Erro de integridade do banco de dados durante a sincronização: {e}"
         )
         raise e
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"Erro inesperado durante a sincronização de categorias: {e}")
         raise e

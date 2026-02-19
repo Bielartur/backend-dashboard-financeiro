@@ -10,8 +10,7 @@ from fastapi import (
     BackgroundTasks,
     Request,
 )
-from sqlalchemy.orm import Session
-from src.database.core import get_db
+from src.database.core import DbSession
 from .model import WebhookEvent
 from . import service
 
@@ -25,14 +24,14 @@ logger = logging.getLogger(__name__)
 async def handle_pluggy_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
+    db: DbSession,
 ):
     try:
         body = await request.json()
         logger.info(f"[Webhook] Raw Payload: {body}")
 
         event = WebhookEvent.model_validate(body)
-        service.process_webhook_event(event, background_tasks, db)
+        await service.process_webhook_event(event, background_tasks, db)
         return {"message": "Webhook processed"}
     except Exception as e:
         logger.error(f"[Webhook] Error processing webhook: {e}")
