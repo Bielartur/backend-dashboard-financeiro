@@ -58,8 +58,8 @@ async def create_merchant_alias_group(
             f"Novo alias registrado: {new_alias.pattern} -> merchants {alias_group.merchant_ids} pelo usuário {current_user.get_uuid()}"
         )
 
-        # Batch update existing payments for these merchants if a category was selected
-        if alias_group.category_id:
+        # Batch update existing payments for these merchants if a category was selected and requested
+        if alias_group.category_id and alias_group.update_past_transactions:
             await update_transactions_category_bulk(
                 db,
                 current_user.get_uuid(),
@@ -201,8 +201,8 @@ async def update_merchant_alias(
     await db.commit()
     await db.refresh(alias)
 
-    # Batch update existing payments if category changed and is present
-    if alias_update.category_id is not None:
+    # Batch update existing payments if category changed, is present, and user requested override
+    if alias_update.category_id is not None and alias_update.update_past_transactions:
         # Fetch merchants belonging to this alias
         # We need to await the relationship loading or query manually since it's lazy by default (and async relies on selectin load or explicit join)
         # Easier to query IDs manually.
