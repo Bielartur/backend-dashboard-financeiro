@@ -26,8 +26,6 @@ class TransactionMethod(enum.Enum):
     BankTransfer = "bank_transfer"
     Cash = "cash"
     Boleto = "boleto"
-    BillPayment = "bill_payment"
-    InvestmentRedemption = "investment_redemption"
     Other = "other"
 
     @property
@@ -39,8 +37,6 @@ class TransactionMethod(enum.Enum):
             "bank_transfer": "Transferência Bancária",
             "cash": "Dinheiro",
             "boleto": "Boleto",
-            "bill_payment": "Pagamento de Fatura",
-            "investment_redemption": "Resgate de Investimento",
             "other": "Outro",
         }
         return labels.get(self.value, self.value)
@@ -76,7 +72,6 @@ class Transaction(Base):
     )
     date = Column(Date, nullable=False, index=True)
     title = Column(String, nullable=False, index=True)
-    description = Column(String, nullable=True)
     amount = Column(DECIMAL, nullable=False)
     type = Column(
         Enum(TransactionType, values_callable=lambda x: [e.value for e in x]),

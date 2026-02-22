@@ -29,7 +29,7 @@ class Merchant(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
     merchant_alias_id = Column(
-        UUID(as_uuid=True), ForeignKey("merchant_aliases.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("merchant_aliases.id"), nullable=True
     )
 
     merchant_alias = relationship("MerchantAlias", back_populates="merchants")
