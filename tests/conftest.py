@@ -17,8 +17,10 @@ from src.auth.service import create_access_token, get_password_hash
 from src.auth.model import TokenData
 from src.entities.user import User
 from src.entities.bank import Bank
-from datetime import timedelta
+from datetime import timedelta, date
+from decimal import Decimal
 import uuid
+from src.entities.transaction import Transaction, TransactionType
 
 # Setup In-Memory SQLite Database for testing (Async)
 SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -46,6 +48,8 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+    await engine.dispose()
 
 
 @pytest.fixture(scope="function")
@@ -206,3 +210,61 @@ async def sample_merchant_alias(sample_merchant, db_session):
         )
         return result.scalars().first()
     return sample_merchant.merchant_alias
+
+
+@pytest.fixture(scope="function")
+async def sample_transaction(
+    db_session, test_user, sample_category, sample_bank, sample_merchant
+):
+    """
+    Creates a detailed sample transaction with all relationships linked.
+    """
+    tx = Transaction(
+        user_id=test_user.id,
+        category_id=sample_category.id,
+        bank_id=sample_bank.id,
+        merchant_id=sample_merchant.id,
+        amount=Decimal("-50.00"),
+        date=date.today(),
+        title="Sample Transaction",
+        type=TransactionType.EXPENSE,
+    )
+    db_session.add(tx)
+    await db_session.commit()
+    await db_session.refresh(tx)
+    return tx
+
+
+@pytest.fixture(scope="function")
+async def transaction_factory(
+    db_session, test_user, sample_category, sample_merchant, sample_bank
+):
+    """
+    Factory fixture to create transactions with custom attributes.
+    Usage:
+        tx = await transaction_factory(amount=Decimal("100"), type=TransactionType.INCOME)
+    """
+
+    async def _create_transaction(**kwargs):
+        defaults = {
+            "user_id": test_user.id,
+            "category_id": sample_category.id,
+            "merchant_id": sample_merchant.id,
+            "bank_id": sample_bank.id,
+            "amount": Decimal("-50.00"),
+            "date": date.today(),
+            "title": "Factory Transaction Title",
+            "type": TransactionType.EXPENSE,
+        }
+
+        # Override defaults with provided kwargs
+        for key, value in kwargs.items():
+            defaults[key] = value
+
+        tx = Transaction(**defaults)
+        db_session.add(tx)
+        await db_session.commit()
+        await db_session.refresh(tx)
+        return tx
+
+    return _create_transaction
