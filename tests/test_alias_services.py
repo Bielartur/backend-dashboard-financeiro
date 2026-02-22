@@ -3,6 +3,9 @@ from uuid import uuid4
 from sqlalchemy import select
 from datetime import date
 from decimal import Decimal
+from psycopg2.errors import UniqueViolation
+from sqlalchemy.exc import IntegrityError
+from unittest.mock import patch, AsyncMock
 
 from src.aliases import service, model
 from src.merchants import service as merchant_service
@@ -249,10 +252,8 @@ async def test_cleanup_empty_aliases(db_session, test_user, token_data):
 
     await service._cleanup_empty_aliases(db_session, test_user.id)
 
-    result = await db_session.execute(
-        select(MerchantAlias).where(MerchantAlias.id == empty_alias.id)
-    )
-    assert result.scalars().first() is None
+    with pytest.raises(MerchantAliasNotFoundError):
+        await service.get_alias_by_id(token_data, db_session, empty_alias.id)
 
 
 @pytest.mark.asyncio
@@ -279,7 +280,6 @@ async def test_create_merchant_alias_group_updates_transactions(
         amount=Decimal("100.00"),
         date=date.today(),
         title="Uber Trip",
-        description="Uber Trip",
         bank_id=sample_bank.id,
         category_id=initial_category.id,
         type="expense",
@@ -342,15 +342,7 @@ async def test_update_alias_duplicate_pattern_error(
     )
 
     # Get second alias (the one automatically created for m3)
-    alias2 = (
-        (
-            await db_session.execute(
-                select(MerchantAlias).where(MerchantAlias.id == m3.merchant_alias_id)
-            )
-        )
-        .scalars()
-        .first()
-    )
+    alias2 = await service.get_alias_by_id(token_data, db_session, m3.merchant_alias_id)
 
     # Try to update alias2 to have the same pattern as alias1
     update_data = model.MerchantAliasUpdate(pattern="Uber")
@@ -476,9 +468,104 @@ async def test_search_aliases_filter(db_session, test_user):
     )
     assert len(res_search_gen_2.items) == 0
 
-    # Search "Broker" in investment -> Should find
     res_search_inv = await service.search_merchants_by_alias(
         test_user, db_session, query="Broker", scope="investment"
     )
     assert len(res_search_inv.items) == 1
     assert res_search_inv.items[0].pattern == "Investment Broker"
+
+
+@pytest.mark.asyncio
+async def test_create_merchant_alias_group_unique_violation(
+    db_session, test_user, token_data
+):
+    alias_create = model.MerchantAliasCreate(
+        pattern="Uber", merchant_ids=[], category_id=None
+    )
+
+    with patch.object(
+        db_session,
+        "flush",
+        new_callable=AsyncMock,
+        side_effect=IntegrityError("fake", "fake", UniqueViolation()),
+    ):
+        with pytest.raises(MerchantAliasCreationError) as exc_info:
+            await service.create_merchant_alias_group(
+                token_data, db_session, alias_create
+            )
+
+        assert "Já existe um alias com o padrão Uber" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_update_merchant_alias_is_investment_and_ignored(
+    db_session, test_user, token_data, sample_merchants
+):
+    m1, _, _ = sample_merchants
+
+    alias_create = model.MerchantAliasCreate(
+        pattern="Invest Test", merchant_ids=[m1.id], category_id=None
+    )
+    alias = await service.create_merchant_alias_group(
+        token_data, db_session, alias_create
+    )
+
+    update_data = model.MerchantAliasUpdate(is_investment=True, ignored=True)
+    updated_alias = await service.update_merchant_alias(
+        token_data, db_session, alias.id, update_data
+    )
+
+    assert updated_alias.is_investment is True
+    assert updated_alias.ignored is True
+
+
+@pytest.mark.asyncio
+async def test_remove_merchant_alias_not_found(db_session, token_data):
+    with pytest.raises(MerchantAliasNotFoundError):
+        await service.remove_merchant_from_alias(
+            token_data, db_session, uuid4(), uuid4()
+        )
+
+
+@pytest.mark.asyncio
+async def test_remove_merchant_merchant_not_found(
+    db_session, test_user, token_data, sample_merchants
+):
+    m1, _, _ = sample_merchants
+    alias_create = model.MerchantAliasCreate(
+        pattern="Uber2", merchant_ids=[m1.id], category_id=None
+    )
+    alias = await service.create_merchant_alias_group(
+        token_data, db_session, alias_create
+    )
+
+    with pytest.raises(MerchantNotFoundError):
+        await service.remove_merchant_from_alias(
+            token_data, db_session, alias.id, uuid4()
+        )
+
+
+@pytest.mark.asyncio
+async def test_remove_merchant_merchant_not_belong(
+    db_session, test_user, token_data, sample_merchants
+):
+    m1, m2, _ = sample_merchants
+    alias_create = model.MerchantAliasCreate(
+        pattern="Uber3", merchant_ids=[m1.id], category_id=None
+    )
+    alias = await service.create_merchant_alias_group(
+        token_data, db_session, alias_create
+    )
+
+    with pytest.raises(MerchantNotBelongToAliasError):
+        await service.remove_merchant_from_alias(
+            token_data, db_session, alias.id, m2.id
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_aliases_filter_unknown_scope(db_session, test_user):
+    res = await service.get_merchant_aliases(
+        test_user, db_session, scope="unknown", size=100
+    )
+    assert res is not None

@@ -11,6 +11,7 @@ class MerchantAliasBase(CamelModel):
     category_id: Optional[UUID] = None
     is_investment: bool = False
     ignored: bool = False
+    update_past_transactions: bool = True
 
 
 class MerchantAliasCreate(MerchantAliasBase):
@@ -23,6 +24,7 @@ class MerchantAliasUpdate(CamelModel):
     category_id: Optional[UUID] = None
     is_investment: Optional[bool] = None
     ignored: Optional[bool] = None
+    update_past_transactions: Optional[bool] = True
 
 
 class MerchantAliasMerge(CamelModel):
