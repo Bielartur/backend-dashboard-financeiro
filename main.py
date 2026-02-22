@@ -9,6 +9,7 @@ from src.entities.user import User
 from src.entities.open_finance_item import OpenFinanceItem
 from src.api import register_routes
 from src.logging import configure_logging, LogLevels
+from src.exceptions.handlers import register_exception_handlers
 import os
 
 configure_logging(LogLevels.info)
@@ -42,3 +43,4 @@ app.add_middleware(
 )
 
 register_routes(app)
+register_exception_handlers(app)
