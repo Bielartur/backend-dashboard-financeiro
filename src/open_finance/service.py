@@ -505,7 +505,6 @@ async def _sync_transactions_for_single_account(
                     bank_id=bank_id,
                     date=date_obj,
                     title=merchant.name,
-                    description=tx.get("description"),
                     amount=amount,
                     type=transaction_type,
                     open_finance_id=tx_composite_id,

@@ -42,7 +42,7 @@ class NubankParser(BaseParser):
                     r"\s*-\s*Parcela\s+\d+/\d+", "", title, flags=re.IGNORECASE
                 )
                 if clean_title == "Pagamento recebido":
-                    payment_method = TransactionMethod.BillPayment
+                    payment_method = TransactionMethod.DebitCard
                 else:
                     payment_method = TransactionMethod.CreditCard
 
@@ -109,9 +109,9 @@ class NubankParser(BaseParser):
                 elif re.search(r"Pagamento de boleto", description, re.IGNORECASE):
                     payment_method = TransactionMethod.Boleto
                 elif re.search(r"Pagamento de fatura", description, re.IGNORECASE):
-                    payment_method = TransactionMethod.BillPayment
+                    payment_method = TransactionMethod.DebitCard
                 elif re.search(r"Resgate RDB", description, re.IGNORECASE):
-                    payment_method = TransactionMethod.InvestmentRedemption
+                    payment_method = TransactionMethod.Other
 
                 # Fallback for "Transferência Recebida" without "pelo Pix" is already covered by the first regex
 

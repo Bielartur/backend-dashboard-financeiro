@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, TypedDict
 from uuid import UUID
 from enum import Enum
 from pydantic import Field, field_validator
@@ -11,6 +11,19 @@ from src.categories.model import CategoryResponse
 from src.merchants.model import MerchantResponse
 from src.banks.model import BankResponse
 from src.entities.transaction import TransactionType
+
+
+class TransactionDict(TypedDict, total=False):
+    title: str
+    amount: Decimal
+    date: date
+    bank_id: UUID
+    user_id: UUID
+    merchant_id: UUID
+    category_id: UUID
+    type: TransactionType
+    payment_method: str
+    open_finance_id: str
 
 
 class TransactionMethodSchema(CamelModel):
