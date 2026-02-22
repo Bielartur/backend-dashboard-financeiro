@@ -216,3 +216,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 pluggy_transactions_dump.json
+uploads/
+.idea/
+.agent/
