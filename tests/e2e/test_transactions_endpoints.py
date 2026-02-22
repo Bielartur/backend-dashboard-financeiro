@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch, AsyncMock
 from httpx import AsyncClient
 from datetime import date
 from decimal import Decimal
@@ -102,3 +103,63 @@ async def test_delete_transaction_api(
     # Verify
     get_res = await client.get(f"/transactions/{t_id}", headers=auth_headers)
     assert get_res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_import_transactions_api_success(client: AsyncClient, auth_headers):
+    file_content = b"dummy content"
+    files = {"file": ("test.csv", file_content, "text/csv")}
+
+    with patch(
+        "src.transactions.controller.service.import_transactions_from_csv",
+        new_callable=AsyncMock,
+    ) as mock_import:
+        mock_import.return_value = []
+
+        response = await client.post(
+            "/transactions/import/nubank?type=invoice",
+            files=files,
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_import_transactions_api_invalid_source(
+    client: AsyncClient, auth_headers
+):
+    file_content = b"dummy content"
+    files = {"file": ("test.csv", file_content, "text/csv")}
+
+    response = await client.post(
+        "/transactions/import/invalid_bank?type=invoice",
+        files=files,
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert "O valor deve ser um dos seguintes: " in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.asyncio
+async def test_import_transactions_api_invalid_type(client: AsyncClient, auth_headers):
+    file_content = b"dummy content"
+    files = {"file": ("test.csv", file_content, "text/csv")}
+
+    response = await client.post(
+        "/transactions/import/nubank?type=invalid_type",
+        files=files,
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+    assert "O valor deve ser um dos seguintes: " in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.asyncio
+async def test_import_transactions_api_missing_file(client: AsyncClient, auth_headers):
+    response = await client.post(
+        "/transactions/import/nubank?type=invoice", headers=auth_headers
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["msg"] == "Campo obrigatório ausente."
