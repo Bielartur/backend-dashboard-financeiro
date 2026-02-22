@@ -85,7 +85,8 @@ INVESTMENT_SLUGS = [
 
 # Threshold for grouping small metrics into "Outros" (0.25% = 0.0025)
 OTHERS_THRESHOLD = Decimal("0.0025")
-OTHERS_ID = "__others__"
+OTHERS_INCOME_ID = "__others_income__"
+OTHERS_EXPENSE_ID = "__others_expense__"
 OTHERS_NAME = "Outros"
 OTHERS_COLOR = "#94a3b8"
 
@@ -101,40 +102,61 @@ def _aggregate_small_metrics(
     if not metrics:
         return metrics
 
-    # Calculate total absolute value
-    total = sum(abs(m.total) for m in metrics)
-    if total == 0:
-        return metrics
+    # Split into Income and Expense
+    incomes = [m for m in metrics if m.type == TransactionType.INCOME]
+    expenses = [m for m in metrics if m.type == TransactionType.EXPENSE]
 
-    main_metrics = []
-    others_metrics = []
+    def _process_group(
+        group_metrics: List[DashboardMetric], group_type: TransactionType
+    ) -> List[DashboardMetric]:
+        if not group_metrics:
+            return []
 
-    for m in metrics:
-        ratio = abs(m.total) / total if total > 0 else Decimal(0)
-        if ratio <= threshold:
-            others_metrics.append(m)
-        else:
-            main_metrics.append(m)
+        # Calculate total absolute value for this group
+        total = sum(abs(m.total) for m in group_metrics)
+        if total == 0:
+            return group_metrics
 
-    # If we have small metrics to group, create the "Outros" entry
-    if others_metrics:
-        others_total = sum(m.total for m in others_metrics)
-        others = DashboardMetric(
-            id=OTHERS_ID,
-            name=OTHERS_NAME,
-            color_hex=OTHERS_COLOR,
-            type=(
-                TransactionType.EXPENSE if others_total < 0 else TransactionType.INCOME
-            ),
-            total=others_total,
-            average=Decimal(0),
-            status="average",
-            grouped_ids=[m.id for m in others_metrics],
-        )
-        # Outros is always at the end
-        main_metrics.append(others)
+        main = []
+        others = []
 
-    return main_metrics
+        for m in group_metrics:
+            ratio = abs(m.total) / total
+            if ratio <= threshold:
+                others.append(m)
+            else:
+                main.append(m)
+
+        if others:
+            others_total = sum(m.total for m in others)
+
+            # Determine correct ID based on type
+            metric_id = (
+                OTHERS_INCOME_ID
+                if group_type == TransactionType.INCOME
+                else OTHERS_EXPENSE_ID
+            )
+
+            others_metric = DashboardMetric(
+                id=metric_id,
+                name=OTHERS_NAME,
+                color_hex=OTHERS_COLOR,
+                type=group_type,
+                total=others_total,
+                average=Decimal(0),
+                status="average",
+                grouped_ids=[m.id for m in others],
+            )
+            main.append(others_metric)
+
+        return main
+
+    # Process each group independently
+    processed_incomes = _process_group(incomes, TransactionType.INCOME)
+    processed_expenses = _process_group(expenses, TransactionType.EXPENSE)
+
+    # Return combined list
+    return processed_incomes + processed_expenses
 
 
 async def get_dashboard_data(
